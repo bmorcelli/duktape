@@ -87,20 +87,6 @@ DUK_LOCAL duk_codepoint_t duk__utf8_decode_next(duk__decode_context *dec_ctx, du
 				dec_ctx->lower = 0xa0;
 				DUK_ASSERT(dec_ctx->upper == 0xbf);
 			} else if (x == 0xed) {
-				/* This restricts away U+D800 to U+DFFF:
-				 * >>> u'\ud7ff'.encode('utf-8').encode('hex')
-				 * 'ed9fbf'
-				 * >>> u'\ud800'.encode('utf-8').encode('hex')
-				 * 'eda080'
-				 * >>> u'\udbff'.encode('utf-8').encode('hex')
-				 * 'edafbf'
-				 * >>> u'\udc00'.encode('utf-8').encode('hex')
-				 * 'edb080'
-				 * >>> u'\udfff'.encode('utf-8').encode('hex')
-				 * 'edbfbf'
-				 * >>> u'\ue000'.encode('utf-8').encode('hex')
-				 * 'ee8080'
-				 */
 				DUK_ASSERT(dec_ctx->lower == 0x80);
 				dec_ctx->upper = 0x9f;
 			}
@@ -382,7 +368,7 @@ DUK_INTERNAL duk_ret_t duk_bi_textencoder_prototype_encode(duk_hthread *thr) {
 		h_input = duk_to_hstring(thr, 0);
 		DUK_ASSERT(h_input != NULL);
 
-		len = (duk_size_t) duk_hstring_get_charlen(h_input);
+		len = (duk_size_t) DUK_HSTRING_GET_CHARLEN(h_input);
 		if (len >= DUK_HBUFFER_MAX_BYTELEN / 3) {
 			DUK_ERROR_TYPE(thr, DUK_STR_RESULT_TOO_LONG);
 			DUK_WO_NORETURN(return 0;);
@@ -461,7 +447,7 @@ DUK_INTERNAL duk_ret_t duk_bi_textdecoder_constructor(duk_hthread *thr) {
 		/* XXX: For now ignore 'label' (encoding identifier). */
 		duk_to_string(thr, 0);
 	}
-	if (!duk_is_nullish(thr, 1)) {
+	if (!duk_is_null_or_undefined(thr, 1)) {
 		if (duk_get_prop_literal(thr, 1, "fatal")) {
 			fatal = duk_to_boolean(thr, -1);
 		}

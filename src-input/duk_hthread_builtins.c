@@ -7,7 +7,7 @@
 #include "duk_internal.h"
 
 /*
- *  Encoding constants, must match configure tooling.
+ *  Encoding constants, must match genbuiltins.py
  */
 
 #define DUK__PROP_FLAGS_BITS  3
@@ -28,7 +28,7 @@
 
 /*
  *  Create built-in objects by parsing an init bitstream generated
- *  by configure tooling.
+ *  by genbuiltins.py.
  */
 
 #if defined(DUK_USE_ROM_OBJECTS)
@@ -48,7 +48,7 @@ DUK_LOCAL void duk__duplicate_ram_global_object(duk_hthread *thr) {
 	/* Inherit from ROM-based global object: less RAM usage, less transparent. */
 	h_global = duk_push_object_helper(thr,
 	                                  DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS |
-	                                      DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_GLOBAL),
+	                                      DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_GLOBAL),
 	                                  DUK_BIDX_GLOBAL);
 	DUK_ASSERT(h_global != NULL);
 #elif defined(DUK_USE_ROM_GLOBAL_CLONE)
@@ -58,7 +58,7 @@ DUK_LOCAL void duk__duplicate_ram_global_object(duk_hthread *thr) {
 	 */
 	h_global = duk_push_object_helper(thr,
 	                                  DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS |
-	                                      DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_GLOBAL),
+	                                      DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_GLOBAL),
 	                                  DUK_BIDX_OBJECT_PROTOTYPE);
 	DUK_ASSERT(h_global != NULL);
 	h_oldglobal = thr->builtins[DUK_BIDX_GLOBAL];
@@ -68,27 +68,29 @@ DUK_LOCAL void duk__duplicate_ram_global_object(duk_hthread *thr) {
 	 * For ROM objects it's not necessary (or possible) to update
 	 * refcounts so leave them as is.
 	 */
-	alloc_size = duk_hobject_get_ebytes(h_oldglobal);
+	alloc_size = DUK_HOBJECT_P_ALLOC_SIZE(h_oldglobal);
 	DUK_ASSERT(alloc_size > 0);
 	props = DUK_ALLOC_CHECKED(thr, alloc_size);
 	DUK_ASSERT(props != NULL);
-	DUK_ASSERT(duk_hobject_get_strprops(thr->heap, h_oldglobal) != NULL);
-	duk_memcpy((void *) props, (const void *) duk_hobject_get_strprops(thr->heap, h_oldglobal), alloc_size);
+	DUK_ASSERT(DUK_HOBJECT_GET_PROPS(thr->heap, h_oldglobal) != NULL);
+	duk_memcpy((void *) props, (const void *) DUK_HOBJECT_GET_PROPS(thr->heap, h_oldglobal), alloc_size);
 
 	/* XXX: keep property attributes or tweak them here?
 	 * Properties will now be non-configurable even when they're
 	 * normally configurable for the global object.
 	 */
 
-	DUK_ASSERT(duk_hobject_get_strprops(thr->heap, h_global) == NULL);
-	duk_hobject_set_strprops(thr->heap, h_global, props);
-	duk_hobject_set_esize(h_global, duk_hobject_get_esize(h_oldglobal));
-	duk_hobject_set_enext(h_global, duk_hobject_get_enext(h_oldglobal));
+	DUK_ASSERT(DUK_HOBJECT_GET_PROPS(thr->heap, h_global) == NULL);
+	DUK_HOBJECT_SET_PROPS(thr->heap, h_global, props);
+	DUK_HOBJECT_SET_ESIZE(h_global, DUK_HOBJECT_GET_ESIZE(h_oldglobal));
+	DUK_HOBJECT_SET_ENEXT(h_global, DUK_HOBJECT_GET_ENEXT(h_oldglobal));
+	DUK_HOBJECT_SET_ASIZE(h_global, DUK_HOBJECT_GET_ASIZE(h_oldglobal));
+	DUK_HOBJECT_SET_HSIZE(h_global, DUK_HOBJECT_GET_HSIZE(h_oldglobal));
 #else
 #error internal error in config defines
 #endif
 
-	duk_hobject_compact_object(thr, h_global);
+	duk_hobject_compact_props(thr, h_global);
 	DUK_ASSERT(thr->builtins[DUK_BIDX_GLOBAL] != NULL);
 	DUK_ASSERT(
 	    !DUK_HEAPHDR_NEEDS_REFCOUNT_UPDATE((duk_heaphdr *) thr->builtins[DUK_BIDX_GLOBAL])); /* no need to decref: ROM object */
@@ -101,9 +103,10 @@ DUK_LOCAL void duk__duplicate_ram_global_object(duk_hthread *thr) {
 	 * global object.
 	 */
 	h_objenv =
-	    (duk_hobject *) duk_hobjenv_alloc(thr, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_OBJENV));
+	    (duk_hobject *) duk_hobjenv_alloc(thr,
+	                                      DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_OBJENV));
 	DUK_ASSERT(h_objenv != NULL);
-	DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, h_objenv) == NULL);
+	DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, h_objenv) == NULL);
 	duk_push_hobject(thr, h_objenv);
 
 	DUK_ASSERT(h_global != NULL);
@@ -183,7 +186,7 @@ DUK_LOCAL void duk__push_double(duk_hthread *thr, duk_bitdecoder_ctx *bd) {
 
 	for (i = 0; i < 8; i++) {
 		/* Encoding endianness must match target memory layout,
-		 * build scripts and configure tooling must ensure this.
+		 * build scripts and genbuiltins.py must ensure this.
 		 */
 		du.uc[i] = (duk_uint8_t) duk_bd_decode(bd, 8);
 	}
@@ -225,13 +228,13 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 	DUK_DD(DUK_DDPRINT("create empty built-ins"));
 	DUK_ASSERT_TOP(thr, 0);
 	for (i = 0; i < DUK_NUM_ALL_BUILTINS; i++) {
-		duk_small_uint_t htype;
+		duk_small_uint_t class_num;
 		duk_small_int_t len = -1; /* must be signed */
 
-		htype = (duk_small_uint_t) duk_bd_decode_varuint(bd);
+		class_num = (duk_small_uint_t) duk_bd_decode_varuint(bd);
 		len = (duk_small_int_t) duk_bd_decode_flagged_signed(bd, DUK__LENGTH_PROP_BITS, (duk_int32_t) -1 /*def_value*/);
 
-		if (htype == DUK_HTYPE_NATFUNC) {
+		if (class_num == DUK_HOBJECT_CLASS_FUNCTION) {
 			duk_small_uint_t natidx;
 			duk_small_int_t c_nargs; /* must hold DUK_VARARGS */
 			duk_c_function c_func;
@@ -282,16 +285,17 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 			/* Cast converts magic to 16-bit signed value */
 			magic = (duk_int16_t) duk_bd_decode_varuint(bd);
 			((duk_hnatfunc *) h)->magic = magic;
-		} else if (htype == DUK_HTYPE_ARRAY) {
+		} else if (class_num == DUK_HOBJECT_CLASS_ARRAY) {
 			duk_push_array(thr);
-		} else if (htype == DUK_HTYPE_OBJENV) {
+		} else if (class_num == DUK_HOBJECT_CLASS_OBJENV) {
 			duk_hobjenv *env;
 			duk_hobject *global;
 
 			DUK_ASSERT(i == DUK_BIDX_GLOBAL_ENV);
 			DUK_ASSERT(DUK_BIDX_GLOBAL_ENV > DUK_BIDX_GLOBAL);
 
-			env = duk_hobjenv_alloc(thr, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_OBJENV));
+			env = duk_hobjenv_alloc(thr,
+			                        DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_OBJENV));
 			DUK_ASSERT(env->target == NULL);
 			duk_push_hobject(thr, (duk_hobject *) env);
 
@@ -303,16 +307,15 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 
 			DUK_HOBJENV_ASSERT_VALID(env);
 		} else {
-			DUK_ASSERT(htype != DUK_HTYPE_DECENV);
+			DUK_ASSERT(class_num != DUK_HOBJECT_CLASS_DECENV);
 
 			(void) duk_push_object_helper(thr,
-			                              DUK_HOBJECT_FLAG_FASTREFS | DUK_HOBJECT_FLAG_EXTENSIBLE |
-			                                  DUK_HEAPHDR_HTYPE_AS_FLAGS(htype),
-			                              -1);
+			                              DUK_HOBJECT_FLAG_FASTREFS | DUK_HOBJECT_FLAG_EXTENSIBLE,
+			                              -1); /* no prototype or class yet */
 		}
 
 		h = duk_known_hobject(thr, -1);
-		DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(h) == htype);
+		DUK_HOBJECT_SET_CLASS_NUMBER(h, class_num);
 
 		if (i < DUK_NUM_BUILTINS) {
 			thr->builtins[i] = h;
@@ -330,17 +333,17 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 			 * not encoded explicitly in init data.
 			 */
 
-			DUK_ASSERT(htype != DUK_HTYPE_ARRAY); /* .length is virtual */
+			DUK_ASSERT(class_num != DUK_HOBJECT_CLASS_ARRAY); /* .length is virtual */
 			duk_push_int(thr, len);
 			duk_xdef_prop_stridx_short(thr, -2, DUK_STRIDX_LENGTH, DUK_PROPDESC_FLAGS_C);
 		}
 
 		/* enable exotic behaviors last */
 
-		if (htype == DUK_HTYPE_ARRAY) {
+		if (class_num == DUK_HOBJECT_CLASS_ARRAY) {
 			DUK_ASSERT(DUK_HOBJECT_HAS_EXOTIC_ARRAY(h)); /* set by duk_push_array() */
 		}
-		if (htype == DUK_HTYPE_STRING_OBJECT) {
+		if (class_num == DUK_HOBJECT_CLASS_STRING) {
 			DUK_HOBJECT_SET_EXOTIC_STRINGOBJ(h);
 		}
 
@@ -353,6 +356,7 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 		/* DUK_HOBJECT_FLAG_NATFUNC varies */
 		DUK_ASSERT(!DUK_HOBJECT_IS_THREAD(h));
 		DUK_ASSERT(!DUK_HOBJECT_IS_PROXY(h));
+		DUK_ASSERT(!DUK_HOBJECT_HAS_ARRAY_PART(h) || class_num == DUK_HOBJECT_CLASS_ARRAY);
 		/* DUK_HOBJECT_FLAG_STRICT varies */
 		DUK_ASSERT(!DUK_HOBJECT_HAS_NATFUNC(h) || /* all native functions have NEWENV */
 		           DUK_HOBJECT_HAS_NEWENV(h));
@@ -362,12 +366,12 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 		/* DUK_HOBJECT_FLAG_EXOTIC_STRINGOBJ varies */
 		DUK_ASSERT(!DUK_HOBJECT_HAS_EXOTIC_ARGUMENTS(h));
 
-		DUK_DDD(DUK_DDDPRINT("created built-in %ld, htype=%ld, length=%ld", (long) i, (long) htype, (long) len));
+		DUK_DDD(DUK_DDDPRINT("created built-in %ld, class=%ld, length=%ld", (long) i, (long) class_num, (long) len));
 	}
 
 	/*
-	 *  Then decode the builtins init data (see configure tooling)
-	 *  to init objects.  Internal prototypes are set at this stage,
+	 *  Then decode the builtins init data (see genbuiltins.py) to
+	 *  init objects.  Internal prototypes are set at this stage,
 	 *  with thr->builtins[] populated.
 	 */
 
@@ -383,14 +387,14 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 		if (t > 0) {
 			t--;
 			DUK_DDD(DUK_DDDPRINT("set internal prototype: built-in %ld", (long) t));
-			duk_hobject_set_proto_raw_updref(thr, h, duk_known_hobject(thr, (duk_idx_t) t));
+			DUK_HOBJECT_SET_PROTOTYPE_UPDREF(thr, h, duk_known_hobject(thr, (duk_idx_t) t));
 		} else if (DUK_HOBJECT_IS_NATFUNC(h)) {
 			/* Standard native built-ins cannot inherit from
 			 * %NativeFunctionPrototype%, they are required to
 			 * inherit from Function.prototype directly.
 			 */
 			DUK_ASSERT(thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE] != NULL);
-			duk_hobject_set_proto_raw_updref(thr, h, thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
+			DUK_HOBJECT_SET_PROTOTYPE_UPDREF(thr, h, thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
 		}
 
 		t = (duk_small_uint_t) duk_bd_decode_varuint(bd);
@@ -506,33 +510,19 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 
 				c_func_getter = duk_bi_native_functions[natidx_getter];
 				if (c_func_getter != NULL) {
-					/* Deal with Function.prototype .caller and .arguments, ensure
-					 * all share the same thrower function instance.
-					 */
-					if (c_func_getter == duk_bi_type_error_thrower) {
-						duk_dup(thr, DUK_BIDX_TYPE_ERROR_THROWER);
-					} else {
-						duk_push_c_function_builtin_noconstruct(thr, c_func_getter, 0); /* always 0 args */
-						duk_set_magic(thr, -1, (duk_int_t) accessor_magic);
-					}
+					duk_push_c_function_builtin_noconstruct(thr, c_func_getter, 0); /* always 0 args */
+					duk_set_magic(thr, -1, (duk_int_t) accessor_magic);
 					defprop_flags |= DUK_DEFPROP_HAVE_GETTER;
 				}
 				c_func_setter = duk_bi_native_functions[natidx_setter];
 				if (c_func_setter != NULL) {
-					/* Deal with Function.prototype .caller and .arguments, ensure
-					 * all share the same thrower function instance.
-					 */
-					if (c_func_setter == duk_bi_type_error_thrower) {
-						duk_dup(thr, DUK_BIDX_TYPE_ERROR_THROWER);
-					} else {
-						duk_push_c_function_builtin_noconstruct(thr, c_func_setter, 1); /* always 1 arg */
-						duk_set_magic(thr, -1, (duk_int_t) accessor_magic);
-					}
+					duk_push_c_function_builtin_noconstruct(thr, c_func_setter, 1); /* always 1 arg */
+					duk_set_magic(thr, -1, (duk_int_t) accessor_magic);
 					defprop_flags |= DUK_DEFPROP_HAVE_SETTER;
 				}
 
 				/* Writable flag doesn't make sense for an accessor. */
-				DUK_ASSERT((defprop_flags & DUK_PROPDESC_FLAG_WRITABLE) == 0); /* configure tooling ensures */
+				DUK_ASSERT((defprop_flags & DUK_PROPDESC_FLAG_WRITABLE) == 0); /* genbuiltins.py ensures */
 
 				defprop_flags &= ~(DUK_DEFPROP_HAVE_VALUE | DUK_DEFPROP_HAVE_WRITABLE);
 				defprop_flags |= DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_HAVE_CONFIGURABLE;
@@ -565,7 +555,7 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 			duk_small_uint_t defprop_flags;
 
 			duk__push_stridx_or_string(thr, bd);
-			h_key = duk_known_hstring_m1(thr);
+			h_key = duk_known_hstring(thr, -1);
 			DUK_UNREF(h_key);
 			natidx = (duk_small_uint_t) duk_bd_decode_varuint(bd);
 
@@ -739,7 +729,7 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 
 #if !defined(DUK_USE_ES6_OBJECT_PROTO_PROPERTY)
 	DUK_DD(DUK_DDPRINT("delete Object.prototype.__proto__ built-in which is not enabled in features"));
-	(void) duk_prop_delete_obj_str(thr,
+	(void) duk_hobject_delprop_raw(thr,
 	                               thr->builtins[DUK_BIDX_OBJECT_PROTOTYPE],
 	                               DUK_HTHREAD_STRING___PROTO__(thr),
 	                               DUK_DELPROP_FLAG_THROW);
@@ -747,7 +737,7 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 
 #if !defined(DUK_USE_ES6_OBJECT_SETPROTOTYPEOF)
 	DUK_DD(DUK_DDPRINT("delete Object.setPrototypeOf built-in which is not enabled in features"));
-	(void) duk_prop_delete_obj_str(thr,
+	(void) duk_hobject_delprop_raw(thr,
 	                               thr->builtins[DUK_BIDX_OBJECT_CONSTRUCTOR],
 	                               DUK_HTHREAD_STRING_SET_PROTOTYPE_OF(thr),
 	                               DUK_DELPROP_FLAG_THROW);
@@ -830,6 +820,17 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 	                "l"
 #endif
 	                " "
+	/* Object property allocation layout */
+#if defined(DUK_USE_HOBJECT_LAYOUT_1)
+	                "p1"
+#elif defined(DUK_USE_HOBJECT_LAYOUT_2)
+	                "p2"
+#elif defined(DUK_USE_HOBJECT_LAYOUT_3)
+	                "p3"
+#else
+	                "p?"
+#endif
+	                " "
 	/* Alignment guarantee */
 #if (DUK_USE_ALIGN_BY == 4)
 	                "a4"
@@ -851,7 +852,7 @@ DUK_INTERNAL void duk_hthread_create_builtin_objects(duk_hthread *thr) {
 
 	DUK_DD(DUK_DDPRINT("compact built-ins"));
 	for (i = 0; i < DUK_NUM_ALL_BUILTINS; i++) {
-		duk_hobject_compact_object(thr, duk_known_hobject(thr, (duk_idx_t) i));
+		duk_hobject_compact_props(thr, duk_known_hobject(thr, (duk_idx_t) i));
 	}
 
 	DUK_D(DUK_DPRINT("INITBUILTINS END"));

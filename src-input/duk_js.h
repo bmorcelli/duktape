@@ -23,12 +23,6 @@
 #define DUK_COMPARE_FLAG_NEGATE          (1U << 0) /* negate result */
 #define DUK_COMPARE_FLAG_EVAL_LEFT_FIRST (1U << 1) /* eval left argument first */
 
-/* Marker value; in E5 2^32-1 is not a valid array index (2^32-2 is highest
- * valid).
- */
-#define DUK_ARRIDX_NONE (0xffffffffUL)
-#define DUK_ARRIDX_MAX  (0xfffffffeUL)
-
 /* conversions, coercions, comparison, etc */
 DUK_INTERNAL_DECL duk_bool_t duk_js_toboolean(duk_tval *tv);
 DUK_INTERNAL_DECL duk_double_t duk_js_tonumber(duk_hthread *thr, duk_tval *tv);
@@ -58,8 +52,8 @@ DUK_INTERNAL_DECL duk_bool_t duk_js_instanceof_ordinary(duk_hthread *thr, duk_tv
 #endif
 DUK_INTERNAL_DECL duk_bool_t duk_js_in(duk_hthread *thr, duk_tval *tv_x, duk_tval *tv_y);
 DUK_INTERNAL_DECL duk_small_uint_t duk_js_typeof_stridx(duk_tval *tv_x);
-DUK_INTERNAL_DECL duk_bool_t duk_js_isarray_hobject(duk_hthread *thr, duk_hobject *h);
-DUK_INTERNAL_DECL duk_bool_t duk_js_isarray(duk_hthread *thr, duk_tval *tv);
+DUK_INTERNAL_DECL duk_bool_t duk_js_isarray_hobject(duk_hobject *h);
+DUK_INTERNAL_DECL duk_bool_t duk_js_isarray(duk_tval *tv);
 
 /* arithmetic */
 DUK_INTERNAL_DECL double duk_js_arith_pow(double x, double y);
@@ -135,12 +129,5 @@ DUK_INTERNAL_DECL void duk_call_setup_propcall_error(duk_hthread *thr, duk_tval 
 
 /* bytecode execution */
 DUK_INTERNAL_DECL void duk_js_execute_bytecode(duk_hthread *exec_thr);
-
-/* properties */
-DUK_INTERNAL_DECL void duk_js_getprototypeof_hproxy(duk_hthread *thr, duk_hproxy *h);
-DUK_INTERNAL_DECL void duk_js_getprototypeof(duk_hthread *thr, duk_hobject *obj);
-DUK_INTERNAL_DECL duk_bool_t duk_js_setprototypeof(duk_hthread *thr, duk_hobject *obj, duk_hobject *proto);
-DUK_INTERNAL_DECL duk_bool_t duk_js_preventextensions(duk_hthread *thr, duk_hobject *obj);
-DUK_INTERNAL_DECL duk_bool_t duk_js_isextensible(duk_hthread *thr, duk_hobject *obj);
 
 #endif /* DUK_JS_H_INCLUDED */

@@ -475,7 +475,7 @@ DUK_LOCAL void duk__cbor_encode_string_top(duk_cbor_encode_context *enc_ctx) {
 #else
 	duk__cbor_encode_uint32(enc_ctx,
 	                        (duk_uint32_t) len,
-	                        (DUK_LIKELY(duk_unicode_is_valid_utf8(str, len) != 0) ? 0x60U : 0x40U));
+	                        (DUK_LIKELY(duk_unicode_is_utf8_compatible(str, len) != 0) ? 0x60U : 0x40U));
 #endif
 	duk__cbor_encode_ensure(enc_ctx, len);
 	p = enc_ctx->ptr;
@@ -545,7 +545,7 @@ DUK_LOCAL void duk__cbor_encode_object(duk_cbor_encode_context *enc_ctx) {
 			duk__cbor_encode_value(enc_ctx);
 			duk__cbor_encode_value(enc_ctx);
 			count++;
-			if (DUK_UNLIKELY(count == 0U)) { /* Wrap check. */
+			if (count == 0U) {
 				duk__cbor_encode_error(enc_ctx);
 			}
 		}
@@ -1129,11 +1129,6 @@ DUK_LOCAL void duk__cbor_decode_string(duk_cbor_decode_context *dec_ctx, duk_uin
 	 *      Symbol representation.
 	 *
 	 * Current behavior is 3.
-	 *
-	 * With WTF-8 this also means that (1) surrogate pairs encoded in
-	 * CESU-8 style are automatically combined to UTF-8, (2) unpaired
-	 * surrogate pairs are kept as is, and (3) invalid WTF-8 is replaced
-	 * with U+FFFD replacement characters.
 	 */
 
 	if (ai == 0x1fU) {

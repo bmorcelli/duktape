@@ -12,7 +12,7 @@
 # Top level object format is mostly self explanatory, a few notes:
 #
 #    - The "id" string is used for referencing objects from property table
-#    - Class names must match that of the configure tooling
+#    - Class names must match array in genbuiltins.py
 #    - If the top level object is a function:
 #      - varargs: if true, function is vararg (nargs = DUK_VARARGS)
 #      - nargs: nargs (ignored if varargs true); if missing, default from 'length' property
@@ -131,11 +131,6 @@
 #        similarly to JSON.parse() results: properties will be
 #        writable, enumerable, and configurable, inherit from
 #        Object.prototype, etc.
-#    - Share property value with another property of the same object:
-#      - type: share_property_value
-#      - key: key of other property whose value to copy
-#      - NOTE: this is useful for sharing a shorthand value, e.g.
-#        for Date.prototype.toGMTString.
 #
 # Magic format:
 #
@@ -607,7 +602,6 @@ objects:
           native: duk_bi_object_constructor_get_own_property_descriptor
           length: 2
           magic: 0
-      #- key: "getOwnPropertyDescriptors"
       - key: "getOwnPropertyNames"
         value:
           type: function
@@ -696,9 +690,6 @@ objects:
           nargs: 2
         es6: true
         present_if: DUK_USE_ES6
-      # - key: entries
-      # - key: fromEntries
-      # - key: values
 
   - id: bi_object_prototype
     class: Object
@@ -886,33 +877,7 @@ objects:
           varargs: true
         present_if: DUK_USE_FUNCTION_BUILTIN
 
-        # ES2015+: AddRestrictedFunctionProperties for Function.prototype.
-        # Getters/setters must be the same %ThrowTypeError% instance.
-        # For now handled specially in built-ins init.
-      - key: "caller"
-        value:
-          type: accessor
-          getter: duk_bi_type_error_thrower
-          setter: duk_bi_type_error_thrower
-          getter_nargs: 0
-          setter_nargs: 1
-          getter_magic: 0
-          setter_magic: 0
-        attributes: "c"
-        es6: true
-        present_if: DUK_USE_FUNCTION_BUILTIN
-      - key: "arguments"
-        value:
-          type: accessor
-          getter: duk_bi_type_error_thrower
-          setter: duk_bi_type_error_thrower
-          getter_nargs: 0
-          setter_nargs: 1
-          getter_magic: 0
-          setter_magic: 0
-        attributes: "c"
-        es6: true
-        present_if: DUK_USE_FUNCTION_BUILTIN
+      # ES2015
       - key:  # @@hasInstance
           type: symbol
           variant: wellknown
@@ -926,6 +891,7 @@ objects:
         present_if: DUK_USE_SYMBOL_BUILTIN
 
   # Duktape specific %NativeFunctionPrototype% which provides some getters.
+  #
   - id: bi_native_function_prototype
     class: Object
     internal_prototype: bi_function_prototype
@@ -2073,11 +2039,16 @@ objects:
       #   Date.prototype.toGMTString === Date.prototype.toUTCString.
       #
       # This is currently handled using a small tweak in duk_hthread_builtins.c
-      # for RAM objects and during metadata loading for ROM objects.
+      # (for RAM objects) and genbuiltins.py (for ROM objects).
+      #
+      # Note that while Smjs respects the requirement in E5 Section B.2.6,
+      # V8 does not.
       - key: "toGMTString"
         value:
-          type: share_property_value
-          key: "toUTCString"
+          type: function
+          native: duk_bi_date_prototype_tostring_shared
+          length: 0
+          magic: 6
         section_b: true
 
       # Non-standard extensions: E5 Section B.2.4, B.2.5, B.2.6
@@ -2909,14 +2880,14 @@ objects:
           type: function
           native: duk_bi_json_object_stringify
           length: 3
-      - key:
-          type: symbol
-          variant: wellknown
-          string: "Symbol.toStringTag"
-        value: "JSON"
-        attributes: "c"
-        es6: true
-        present_if: DUK_USE_SYMBOL_BUILTIN
+
+      #- key:  # @@toStringTag
+      #    type: symbol
+      #    variant: wellknown
+      #    string: "Symbol.toStringTag"
+      #  value: XXX
+      #  es6: true
+      #  present_if: DUK_USE_SYMBOL_BUILTIN
 
   # E5 Section 13.2.3
   - id: bi_type_error_thrower
@@ -2934,7 +2905,7 @@ objects:
       # Custom name, matches V8; ES2016 describes %ThrowTypeError% as being
       # anonymous.
       - key: "name"
-        value: ""
+        value: "ThrowTypeError"
         attributes: "c"
         duktape: true
 
@@ -2945,7 +2916,6 @@ objects:
   - id: bi_duktape
     class: Object
     internal_prototype: bi_object_prototype
-    immutable_prototype: true
     duktape: true
     bidx: true
     #present_if: DUK_USE_DUKTAPE_BUILTIN  # Present even when properties disabled, error augmentation relies on it
@@ -3215,13 +3185,12 @@ objects:
         value: "Proxy"
         attributes: "c"
         es6: true
-      - key: "revocable"
-        value:
-          type: function
-          native: duk_bi_proxy_constructor_revocable
-          length: 2
-          constructable: false
-        es6: true
+      #- key: "revocable"
+      #  value:
+      #    type: function
+      #    native: duk_bi_proxy_constructor_revocable
+      #    length: 2
+      #  es6: true
 
   - id: bi_reflect
     class: Object

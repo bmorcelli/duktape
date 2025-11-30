@@ -61,7 +61,7 @@ DUK_LOCAL duk_uint32_t duk__push_this_obj_len_u32(duk_hthread *thr) {
 
 	/* XXX: push more directly? */
 	(void) duk_push_this_coercible_to_object(thr);
-	DUK_HOBJECT_ASSERT_VALID(thr->heap, duk_get_hobject(thr, -1));
+	DUK_HOBJECT_ASSERT_VALID(duk_get_hobject(thr, -1));
 	duk_get_prop_stridx_short(thr, -1, DUK_STRIDX_LENGTH);
 	len = duk_to_uint32(thr, -1);
 
@@ -92,7 +92,6 @@ DUK_LOCAL duk_uint32_t duk__push_this_obj_len_u32_limited(duk_hthread *thr) {
 DUK_LOCAL duk_harray *duk__arraypart_fastpath_this(duk_hthread *thr) {
 	duk_tval *tv;
 	duk_hobject *h;
-	duk_harray *h_arr;
 	duk_uint_t flags_mask, flags_bits, flags_value;
 
 	DUK_ASSERT(thr->valstack_bottom > thr->valstack); /* because call in progress */
@@ -107,16 +106,13 @@ DUK_LOCAL duk_harray *duk__arraypart_fastpath_this(duk_hthread *thr) {
 	}
 	h = DUK_TVAL_GET_OBJECT(tv);
 	DUK_ASSERT(h != NULL);
-	flags_mask = DUK_HOBJECT_FLAG_EXOTIC_ARRAY | DUK_HEAPHDR_FLAG_READONLY;
-	flags_bits = DUK_HOBJECT_FLAG_EXOTIC_ARRAY;
+	flags_mask = DUK_HOBJECT_FLAG_ARRAY_PART | DUK_HOBJECT_FLAG_EXOTIC_ARRAY | DUK_HEAPHDR_FLAG_READONLY;
+	flags_bits = DUK_HOBJECT_FLAG_ARRAY_PART | DUK_HOBJECT_FLAG_EXOTIC_ARRAY;
 	flags_value = DUK_HEAPHDR_GET_FLAGS_RAW((duk_heaphdr *) h);
 	if ((flags_value & flags_mask) != flags_bits) {
 		DUK_DD(DUK_DDPRINT("reject array fast path: object flag check failed"));
 		return NULL;
 	}
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(h) == DUK_HTYPE_ARRAY);
-	DUK_ASSERT(DUK_HOBJECT_IS_ARRAY(h));
-	h_arr = (duk_harray *) h;
 
 	/* In some cases a duk_harray's 'length' may be larger than the
 	 * current array part allocation.  Avoid the fast path in these
@@ -124,18 +120,18 @@ DUK_LOCAL duk_harray *duk__arraypart_fastpath_this(duk_hthread *thr) {
 	 * items in the range [0,length[ are backed by the current array
 	 * part allocation.
 	 */
-	if (!DUK_HARRAY_ITEMS_COVERED(h_arr)) {
+	if (((duk_harray *) h)->length > DUK_HOBJECT_GET_ASIZE(h)) {
 		DUK_DD(DUK_DDPRINT("reject array fast path: length > array part size"));
 		return NULL;
 	}
 
 	/* Guarantees for fast path. */
-	DUK_ASSERT(h != NULL && h_arr != NULL);
-	DUK_ASSERT(DUK_HARRAY_GET_ITEMS_LENGTH(h_arr) == 0 || DUK_HARRAY_GET_ITEMS(thr->heap, h_arr) != NULL);
-	DUK_ASSERT(DUK_HARRAY_GET_LENGTH(h_arr) <= DUK_HARRAY_GET_ITEMS_LENGTH(h_arr));
+	DUK_ASSERT(h != NULL);
+	DUK_ASSERT(DUK_HOBJECT_GET_ASIZE(h) == 0 || DUK_HOBJECT_A_GET_BASE(thr->heap, h) != NULL);
+	DUK_ASSERT(((duk_harray *) h)->length <= DUK_HOBJECT_GET_ASIZE(h));
 
 	DUK_DD(DUK_DDPRINT("array fast path allowed for: %!O", (duk_heaphdr *) h));
-	return h_arr;
+	return (duk_harray *) h;
 }
 #endif /* DUK_USE_ARRAY_FASTPATH */
 
@@ -161,13 +157,13 @@ DUK_INTERNAL duk_ret_t duk_bi_array_constructor(duk_hthread *thr) {
 		}
 
 		/* For small lengths create a dense preallocated array.
-		 * For large arrays preallocate an initial part only.
+		 * For large arrays preallocate an initial part.
 		 */
 		len_prealloc = len < 64 ? len : 64;
 		a = duk_push_harray_with_size(thr, len_prealloc);
 		DUK_ASSERT(a != NULL);
 		DUK_ASSERT(!duk_is_bare_object(thr, -1));
-		DUK_HARRAY_SET_LENGTH(a, len);
+		a->length = len;
 		return 1;
 	}
 
@@ -181,7 +177,8 @@ DUK_INTERNAL duk_ret_t duk_bi_array_constructor(duk_hthread *thr) {
 
 DUK_INTERNAL duk_ret_t duk_bi_array_constructor_is_array(duk_hthread *thr) {
 	DUK_ASSERT_TOP(thr, 1);
-	return duk_push_boolean_return1(thr, duk_js_isarray(thr, DUK_GET_TVAL_POSIDX(thr, 0)));
+	duk_push_boolean(thr, duk_js_isarray(DUK_GET_TVAL_POSIDX(thr, 0)));
+	return 1;
 }
 
 /*
@@ -231,7 +228,10 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_concat(duk_hthread *thr) {
 	duk_uint32_t j, idx, len;
 	duk_hobject *h;
 	duk_size_t tmp_len;
-	duk_harray *a;
+
+	/* XXX: In ES2015 Array .length can be up to 2^53-1.  The current
+	 * implementation is limited to 2^32-1.
+	 */
 
 	/* XXX: Fast path for array 'this' and array element. */
 
@@ -244,6 +244,13 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_concat(duk_hthread *thr) {
 	duk_insert(thr, 0);
 	n = duk_get_top(thr);
 	duk_push_array(thr); /* -> [ ToObject(this) item1 ... itemN arr ] */
+
+	/* NOTE: The Array special behaviors are NOT invoked by duk_xdef_prop_index()
+	 * (which differs from the official algorithm).  If no error is thrown, this
+	 * doesn't matter as the length is updated at the end.  However, if an error
+	 * is thrown, the length will be unset.  That shouldn't matter because the
+	 * caller won't get a reference to the intermediate value.
+	 */
 
 	idx = 0;
 	for (i = 0; i < n; i++) {
@@ -262,13 +269,13 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_concat(duk_hthread *thr) {
 #if defined(DUK_USE_SYMBOL_BUILTIN)
 			duk_get_prop_stridx(thr, i, DUK_STRIDX_WELLKNOWN_SYMBOL_IS_CONCAT_SPREADABLE);
 			if (duk_is_undefined(thr, -1)) {
-				spreadable = duk_js_isarray_hobject(thr, h);
+				spreadable = duk_js_isarray_hobject(h);
 			} else {
 				spreadable = duk_to_boolean(thr, -1);
 			}
-			duk_pop_nodecref_known(thr);
+			duk_pop_nodecref_unsafe(thr);
 #else
-			spreadable = duk_js_isarray_hobject(thr, h);
+			spreadable = duk_js_isarray_hobject(h);
 #endif
 		}
 
@@ -328,9 +335,8 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_concat(duk_hthread *thr) {
 	 * engines disagree, and the specification bug was fixed in ES2015
 	 * (see NOTE 1 in https://www.ecma-international.org/ecma-262/6.0/#sec-array.prototype.concat).
 	 */
-	a = duk_known_harray(thr, -1);
-	DUK_ASSERT(idx >= DUK_HARRAY_GET_LENGTH(a));
-	DUK_HARRAY_SET_LENGTH(a, idx);
+	duk_push_uarridx(thr, idx);
+	duk_xdef_prop_stridx_short(thr, -2, DUK_STRIDX_LENGTH, DUK_PROPDESC_FLAGS_W);
 
 	DUK_ASSERT_TOP(thr, n + 1);
 	return 1;
@@ -407,8 +413,8 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_join_shared(duk_hthread *thr) {
 		}
 
 		duk_get_prop_index(thr, 1, (duk_uarridx_t) idx);
-		if (duk_is_nullish(thr, -1)) {
-			duk_pop_nodecref_known(thr);
+		if (duk_is_null_or_undefined(thr, -1)) {
+			duk_pop_nodecref_unsafe(thr);
 			duk_push_hstring_empty(thr);
 		} else {
 			if (to_locale_string) {
@@ -439,15 +445,15 @@ DUK_LOCAL duk_ret_t duk__array_pop_fastpath(duk_hthread *thr, duk_harray *h_arr)
 	duk_tval *tv_val;
 	duk_uint32_t len;
 
-	tv_arraypart = DUK_HARRAY_GET_ITEMS(thr->heap, h_arr);
-	len = DUK_HARRAY_GET_LENGTH(h_arr);
+	tv_arraypart = DUK_HOBJECT_A_GET_BASE(thr->heap, (duk_hobject *) h_arr);
+	len = h_arr->length;
 	if (len <= 0) {
 		/* nop, return undefined */
 		return 0;
 	}
 
 	len--;
-	DUK_HARRAY_SET_LENGTH(h_arr, len);
+	h_arr->length = len;
 
 	/* Fast path doesn't check for an index property inherited from
 	 * Array.prototype.  This is quite often acceptable; if not,
@@ -467,8 +473,6 @@ DUK_LOCAL duk_ret_t duk__array_pop_fastpath(duk_hthread *thr, duk_harray *h_arr)
 		DUK_TVAL_SET_UNUSED(tv_val);
 	}
 	thr->valstack_top++;
-
-	DUK_HARRAY_ASSERT_VALID(thr->heap, h_arr);
 
 	/* XXX: there's no shrink check in the fast path now */
 
@@ -517,8 +521,8 @@ DUK_LOCAL duk_ret_t duk__array_push_fastpath(duk_hthread *thr, duk_harray *h_arr
 	duk_uint32_t len;
 	duk_idx_t i, n;
 
-	len = DUK_HARRAY_GET_LENGTH(h_arr);
-	tv_arraypart = DUK_HARRAY_GET_ITEMS(thr->heap, h_arr);
+	len = h_arr->length;
+	tv_arraypart = DUK_HOBJECT_A_GET_BASE(thr->heap, (duk_hobject *) h_arr);
 
 	n = (duk_idx_t) (thr->valstack_top - thr->valstack_bottom);
 	DUK_ASSERT(n >= 0);
@@ -527,9 +531,11 @@ DUK_LOCAL duk_ret_t duk__array_push_fastpath(duk_hthread *thr, duk_harray *h_arr
 		DUK_D(DUK_DPRINT("Array.prototype.push() would go beyond 32-bit length, throw"));
 		DUK_DCERROR_RANGE_INVALID_LENGTH(thr); /* != 0 return value returned as is by caller */
 	}
-	if (len + (duk_uint32_t) n > DUK_HARRAY_GET_ITEMS_LENGTH(h_arr)) {
+	if (len + (duk_uint32_t) n > DUK_HOBJECT_GET_ASIZE((duk_hobject *) h_arr)) {
 		/* Array part would need to be extended.  Rely on slow path
 		 * for now.
+		 *
+		 * XXX: Rework hobject code a bit and add extend support.
 		 */
 		return 0;
 	}
@@ -547,7 +553,7 @@ DUK_LOCAL duk_ret_t duk__array_push_fastpath(duk_hthread *thr, duk_harray *h_arr
 	}
 	thr->valstack_top = thr->valstack_bottom;
 	len += (duk_uint32_t) n;
-	DUK_HARRAY_SET_LENGTH(h_arr, len);
+	h_arr->length = len;
 
 	DUK_ASSERT((duk_uint_t) len == len);
 	duk_push_uint(thr, (duk_uint_t) len);
@@ -607,7 +613,7 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_push(duk_hthread *thr) {
 	len += (duk_uint32_t) n;
 
 	duk_push_u32(thr, len);
-	duk_dup_top_unsafe(thr);
+	duk_dup_top(thr);
 	duk_put_prop_stridx_short(thr, -4, DUK_STRIDX_LENGTH);
 
 	/* [ arg1 ... argN obj length new_length ] */
@@ -726,7 +732,7 @@ DUK_LOCAL duk_small_int_t duk__array_sort_compare(duk_hthread *thr, duk_int_t id
 			ret = 0;
 		}
 
-		duk_pop_nodecref_known(thr);
+		duk_pop_nodecref_unsafe(thr);
 		DUK_DDD(DUK_DDDPRINT("-> result %ld (from comparefn, after coercion)", (long) ret));
 		return ret;
 	}
@@ -743,7 +749,7 @@ DUK_LOCAL duk_small_int_t duk__array_sort_compare(duk_hthread *thr, duk_int_t id
 	goto pop_ret;
 
 pop_ret:
-	duk_pop_2_known(thr);
+	duk_pop_2_unsafe(thr);
 	DUK_DDD(DUK_DDDPRINT("-> result %ld", (long) ret));
 	return ret;
 }
@@ -919,7 +925,7 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_sort(duk_hthread *thr) {
 	}
 
 	DUK_ASSERT_TOP(thr, 3);
-	duk_pop_nodecref_known(thr);
+	duk_pop_nodecref_unsafe(thr);
 	return 1; /* return ToObject(this) */
 }
 
@@ -945,7 +951,6 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_splice(duk_hthread *thr) {
 	duk_int_t act_start;
 	duk_int_t del_count;
 	duk_int_t i, n;
-	duk_harray *h_arr;
 
 	DUK_UNREF(have_delcount);
 
@@ -971,16 +976,20 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_splice(duk_hthread *thr) {
 	}
 	DUK_ASSERT(act_start >= 0 && act_start <= len);
 
+#if defined(DUK_USE_NONSTD_ARRAY_SPLICE_DELCOUNT)
 	if (have_delcount) {
+#endif
 		del_count = duk_to_int_clamped(thr, 1, 0, len - act_start);
+#if defined(DUK_USE_NONSTD_ARRAY_SPLICE_DELCOUNT)
 	} else {
 		/* E5.1 standard behavior when deleteCount is not given would be
 		 * to treat it just like if 'undefined' was given, which coerces
-		 * ultimately to 0.  This didn't match real world behavior, and
-		 * the specification "bug" was fixed in ES2015.
+		 * ultimately to 0.  Real world behavior is to splice to the end
+		 * of array, see test-bi-array-proto-splice-no-delcount.js.
 		 */
 		del_count = len - act_start;
 	}
+#endif
 
 	DUK_ASSERT(nargs >= 2);
 	item_count = (duk_int_t) (nargs - 2);
@@ -1015,10 +1024,8 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_splice(duk_hthread *thr) {
 			duk_pop_undefined(thr);
 		}
 	}
-	h_arr = duk_known_harray(thr, -1);
-	DUK_ASSERT(DUK_HOBJECT_IS_ARRAY((duk_hobject *) h_arr));
-	DUK_ASSERT((duk_uint_t) del_count >= (duk_uint_t) DUK_HARRAY_GET_LENGTH(h_arr));
-	DUK_HARRAY_SET_LENGTH(h_arr, (duk_uint32_t) del_count);
+	duk_push_u32(thr, (duk_uint32_t) del_count);
+	duk_xdef_prop_stridx_short(thr, -2, DUK_STRIDX_LENGTH, DUK_PROPDESC_FLAGS_W);
 
 	/* Steps 12 and 13: reorganize elements to make room for itemCount elements */
 
@@ -1145,7 +1152,7 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_reverse(duk_hthread *thr) {
 	}
 
 	DUK_ASSERT_TOP(thr, 2);
-	duk_pop_known(thr); /* -> [ ToObject(this) ] */
+	duk_pop_unsafe(thr); /* -> [ ToObject(this) ] */
 	return 1;
 }
 
@@ -1208,8 +1215,8 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_slice(duk_hthread *thr) {
 		DUK_ASSERT_TOP(thr, 5);
 	}
 
-	DUK_ASSERT(duk_get_length(thr, 4) == res_length);
-	DUK_UNREF(res_length);
+	duk_push_u32(thr, res_length);
+	duk_xdef_prop_stridx_short(thr, 4, DUK_STRIDX_LENGTH, DUK_PROPDESC_FLAGS_W);
 
 	DUK_ASSERT_TOP(thr, 5);
 	return 1;
@@ -1320,7 +1327,7 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_unshift(duk_hthread *thr) {
 
 	DUK_ASSERT_TOP(thr, nargs + 2);
 	duk_push_u32(thr, len + (duk_uint32_t) nargs);
-	duk_dup_top_unsafe(thr); /* -> [ ... ToObject(this) ToUint32(length) final_len final_len ] */
+	duk_dup_top(thr); /* -> [ ... ToObject(this) ToUint32(length) final_len final_len ] */
 	duk_put_prop_stridx_short(thr, -4, DUK_STRIDX_LENGTH);
 	return 1;
 }
@@ -1404,7 +1411,7 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_indexof_shared(duk_hthread *thr) {
 			}
 		}
 
-		duk_pop_known(thr);
+		duk_pop_unsafe(thr);
 	}
 
 not_found:
@@ -1501,7 +1508,7 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_iter_shared(duk_hthread *thr) {
 			/* nop */
 			break;
 		case DUK__ITER_MAP:
-			duk_dup_top_unsafe(thr);
+			duk_dup_top(thr);
 			duk_xdef_prop_index_wec(thr, 4, (duk_uarridx_t) i); /* retval to result[i] */
 			res_length = i + 1;
 			break;
@@ -1518,38 +1525,31 @@ DUK_INTERNAL duk_ret_t duk_bi_array_prototype_iter_shared(duk_hthread *thr) {
 			DUK_UNREACHABLE();
 			break;
 		}
-		duk_pop_2_known(thr);
+		duk_pop_2_unsafe(thr);
 
 		DUK_ASSERT_TOP(thr, 5);
 	}
 
 	switch (iter_type) {
-	case DUK__ITER_EVERY: {
+	case DUK__ITER_EVERY:
 		duk_push_true(thr);
 		break;
-	}
-	case DUK__ITER_SOME: {
+	case DUK__ITER_SOME:
 		duk_push_false(thr);
 		break;
-	}
-	case DUK__ITER_FOREACH: {
+	case DUK__ITER_FOREACH:
 		duk_push_undefined(thr);
 		break;
-	}
 	case DUK__ITER_MAP:
-	case DUK__ITER_FILTER: {
-		duk_harray *h_arr = duk_known_harray(thr, -1);
+	case DUK__ITER_FILTER:
 		DUK_ASSERT_TOP(thr, 5);
 		DUK_ASSERT(duk_is_array(thr, -1)); /* topmost element is the result array already */
-		DUK_ASSERT(DUK_HOBJECT_IS_ARRAY((duk_hobject *) h_arr));
-		DUK_ASSERT(res_length >= DUK_HARRAY_GET_LENGTH(h_arr));
-		DUK_HARRAY_SET_LENGTH(h_arr, res_length);
+		duk_push_u32(thr, res_length);
+		duk_xdef_prop_stridx_short(thr, -2, DUK_STRIDX_LENGTH, DUK_PROPDESC_FLAGS_W);
 		break;
-	}
-	default: {
+	default:
 		DUK_UNREACHABLE();
 		break;
-	}
 	}
 
 	return 1;

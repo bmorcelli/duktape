@@ -26,7 +26,7 @@
 #include "duktape.h"
 
 /*
- *  Duktape includes (other than duk_config.h)
+ *  Duktape includes (other than duk_features.h)
  *
  *  The header files expect to be included in an order which satisfies header
  *  dependencies correctly (the headers themselves don't include any other
@@ -73,6 +73,5 @@
 #include "duk_numconv.h"
 #include "duk_bi_protos.h"
 #include "duk_selftest.h"
-#include "duk_prop.h"
 
 #endif /* DUK_INTERNAL_H_INCLUDED */

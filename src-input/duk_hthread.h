@@ -198,9 +198,6 @@ DUK_INTERNAL_DECL void duk_ctx_assert_valid(duk_hthread *thr);
 #define DUK_HTHREAD_THIS_PTR(thr) \
 	(DUK_ASSERT_EXPR((thr) != NULL), DUK_ASSERT_EXPR((thr)->valstack_bottom > (thr)->valstack), (thr)->valstack_bottom - 1)
 
-#define DUK_HTHREAD_TVAL_IN_VALSTACK(thr, tv) ((tv) >= (thr)->valstack && (tv) < (thr)->valstack_top)
-#define DUK_HTHREAD_TVAL_IN_VSFRAME(thr, tv)  ((tv) >= (thr)->valstack_bottom && (tv) <= (thr)->valstack_top)
-
 /*
  *  Struct defines
  */
@@ -214,6 +211,13 @@ struct duk_activation {
 	duk_hobject *var_env; /* current variable environment (may be NULL if delayed) */
 	duk_hobject *lex_env; /* current lexical environment (may be NULL if delayed) */
 	duk_catcher *cat; /* current catcher (or NULL) */
+
+#if defined(DUK_USE_NONSTD_FUNC_CALLER_PROPERTY)
+	/* Previous value of 'func' caller, restored when unwound.  Only in use
+	 * when 'func' is non-strict.
+	 */
+	duk_hobject *prev_caller;
+#endif
 
 	duk_instr_t *curr_pc; /* next instruction to execute (points to 'func' bytecode, stable pointer), NULL for native calls */
 
@@ -263,8 +267,8 @@ struct duk_activation {
 
 struct duk_catcher {
 	duk_catcher *parent; /* previous (parent) catcher (or NULL if none) */
-	duk_hstring *h_varname; /* borrowed reference to catch variable name (or NULL if none), reference is valid as long
-	                           activation exists */
+	duk_hstring *h_varname; /* borrowed reference to catch variable name (or NULL if none) */
+	/* (reference is valid as long activation exists) */
 	duk_instr_t *pc_base; /* resume execution from pc_base or pc_base+1 (points to 'func' bytecode, stable pointer) */
 	duk_size_t idx_base; /* idx_base and idx_base+1 get completion value and type */
 	duk_uint32_t flags; /* type and control flags, label number */

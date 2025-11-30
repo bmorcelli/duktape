@@ -923,8 +923,7 @@ DUK_LOCAL void duk__lexer_parse_string_literal(duk_lexer_ctx *lex_ctx,
 			DUK_ASSERT(x != quote);
 			DUK_ASSERT(x != DUK_ASC_BACKSLASH);
 			DUK__APPENDBUFFER_ASCII(lex_ctx, x);
-		} else if (x < 0 || (duk_unicode_is_line_terminator(x) && x != 0x2028 && x != 0x2029)) {
-			/* U+2028 and U+2029 are allowed since ES2019. */
+		} else if (x < 0 || duk_unicode_is_line_terminator(x)) {
 			goto fail_unterminated;
 		} else {
 			/* Character which is part of the string but wasn't handled
@@ -1413,11 +1412,7 @@ restart:
 		break;
 	case DUK_ASC_AMP: /* '&' */
 		if (DUK__L1() == DUK_ASC_AMP) {
-			if (DUK__L2() == DUK_ASC_EQUALS) {
-				advtok = DUK__ADVTOK(3, DUK_TOK_LAND_EQ);
-			} else {
-				advtok = DUK__ADVTOK(2, DUK_TOK_LAND);
-			}
+			advtok = DUK__ADVTOK(2, DUK_TOK_LAND);
 		} else if (DUK__L1() == DUK_ASC_EQUALS) {
 			advtok = DUK__ADVTOK(2, DUK_TOK_BAND_EQ);
 		} else {
@@ -1426,11 +1421,7 @@ restart:
 		break;
 	case DUK_ASC_PIPE: /* '|' */
 		if (DUK__L1() == DUK_ASC_PIPE) {
-			if (DUK__L2() == DUK_ASC_EQUALS) {
-				advtok = DUK__ADVTOK(3, DUK_TOK_LOR_EQ);
-			} else {
-				advtok = DUK__ADVTOK(2, DUK_TOK_LOR);
-			}
+			advtok = DUK__ADVTOK(2, DUK_TOK_LOR);
 		} else if (DUK__L1() == DUK_ASC_EQUALS) {
 			advtok = DUK__ADVTOK(2, DUK_TOK_BOR_EQ);
 		} else {
@@ -1566,7 +1557,7 @@ slow_path:
 
 		/*
 		 *  Interned identifier is compared against reserved words, which are
-		 *  currently interned into the heap context.  See configure tooling.
+		 *  currently interned into the heap context.  See genbuiltins.py.
 		 *
 		 *  Note that an escape in the identifier disables recognition of
 		 *  keywords; e.g. "\u0069f = 1;" is a valid statement (assigns to
@@ -1624,7 +1615,6 @@ slow_path:
 
 		duk_double_t val;
 		duk_bool_t legacy_oct = 0;
-		duk_bool_t last_was_digit = 0;
 		duk_small_int_t state; /* 0=before period/exp,
 		                        * 1=after period, before exp
 		                        * 2=after exp, allow '+' or '-'
@@ -1650,7 +1640,6 @@ slow_path:
 				s2n_radix = 2;
 			} else {
 				pre_adv = 0;
-				last_was_digit = 1;
 				if (DUK__ISDIGIT(y)) {
 					if (strict_mode) {
 						/* Reject octal like \07 but also octal-lookalike
@@ -1697,41 +1686,27 @@ slow_path:
 				if (state == 2) {
 					state = 3;
 				}
-				last_was_digit = 1;
 			} else if (s2n_radix == 16 && DUK__ISHEXDIGIT(x)) {
 				/* Note: 'e' and 'E' are also accepted here. */
-				last_was_digit = 1;
+				;
 			} else if (x == DUK_ASC_PERIOD) {
 				if (state >= 1 || s2n_radix != 10) {
 					break;
 				} else {
 					state = 1;
 				}
-				last_was_digit = 0;
 			} else if (x == DUK_ASC_LC_E || x == DUK_ASC_UC_E) {
 				if (state >= 2 || s2n_radix != 10) {
 					break;
 				} else {
 					state = 2;
 				}
-				last_was_digit = 0;
 			} else if (x == DUK_ASC_MINUS || x == DUK_ASC_PLUS) {
 				if (state != 2) {
 					break;
 				} else {
 					state = 3;
 				}
-				last_was_digit = 0;
-			} else if (x == DUK_ASC_UNDERSCORE) {
-				if (!last_was_digit) {
-					goto fail_number_literal;
-				}
-				if (s2n_radix != 16 ? !DUK__ISDIGIT(DUK__L1()) : !DUK__ISHEXDIGIT(DUK__L1())) {
-					goto fail_number_literal;
-				}
-				DUK__ADVANCECHARS(lex_ctx, 1);
-				last_was_digit = 0;
-				continue;
 			} else {
 				break;
 			}

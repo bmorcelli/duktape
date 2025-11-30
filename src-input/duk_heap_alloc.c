@@ -9,11 +9,6 @@
 #define DUK__FIXED_HASH_SEED 0xabcd1234
 #endif
 
-/* For debug logging in pointer compressed builds. */
-#if defined(DUK_USE_DEBUG) && (defined(DUK_USE_HEAPPTR_ENC16) || defined(DUK_USE_DATAPTR_ENC16) || defined(DUK_USE_FUNCPTR_ENC16))
-DUK_INTERNAL duk_heap *duk_debug_global_heap_singleton = NULL;
-#endif
-
 /*
  *  Free a heap object.
  *
@@ -27,17 +22,9 @@ DUK_INTERNAL void duk_free_hobject(duk_heap *heap, duk_hobject *h) {
 	DUK_ASSERT(heap != NULL);
 	DUK_ASSERT(h != NULL);
 
-	DUK_FREE(heap, duk_hobject_get_strprops(heap, h));
-#if defined(DUK_USE_HOBJECT_HASH_PART)
-	DUK_FREE(heap, duk_hobject_get_strhash(heap, h));
-#endif
-	DUK_FREE(heap, duk_hobject_get_idxprops(heap, h));
-	DUK_FREE(heap, h->idx_hash);
+	DUK_FREE(heap, DUK_HOBJECT_GET_PROPS(heap, h));
 
-	if (DUK_HOBJECT_IS_HARRAY(h)) {
-		duk_harray *a = (duk_harray *) h;
-		DUK_FREE(heap, DUK_HARRAY_GET_ITEMS(heap, a));
-	} else if (DUK_HOBJECT_IS_COMPFUNC(h)) {
+	if (DUK_HOBJECT_IS_COMPFUNC(h)) {
 		duk_hcompfunc *f = (duk_hcompfunc *) h;
 		DUK_UNREF(f);
 		/* Currently nothing to free; 'data' is a heap object */
@@ -109,8 +96,8 @@ DUK_INTERNAL void duk_free_hstring(duk_heap *heap, duk_hstring *h) {
 #if defined(DUK_USE_HSTRING_EXTDATA) && defined(DUK_USE_EXTSTR_FREE)
 	if (DUK_HSTRING_HAS_EXTDATA(h)) {
 		DUK_DDD(
-		    DUK_DDDPRINT("free extstr: hstring %!O, extdata: %p", h, duk_hstring_get_extdata((duk_hstring_external *) h)));
-		DUK_USE_EXTSTR_FREE(heap->heap_udata, (const void *) duk_hstring_get_extdata((duk_hstring_external *) h));
+		    DUK_DDDPRINT("free extstr: hstring %!O, extdata: %p", h, DUK_HSTRING_GET_EXTDATA((duk_hstring_external *) h)));
+		DUK_USE_EXTSTR_FREE(heap->heap_udata, (const void *) DUK_HSTRING_GET_EXTDATA((duk_hstring_external *) h));
 	}
 #endif
 	DUK_FREE(heap, (void *) h);
@@ -120,21 +107,18 @@ DUK_INTERNAL void duk_heap_free_heaphdr_raw(duk_heap *heap, duk_heaphdr *hdr) {
 	DUK_ASSERT(heap);
 	DUK_ASSERT(hdr);
 
-	DUK_DDD(DUK_DDDPRINT("free heaphdr %p, htype %ld", (void *) hdr, (long) DUK_HEAPHDR_GET_HTYPE(hdr)));
+	DUK_DDD(DUK_DDDPRINT("free heaphdr %p, htype %ld", (void *) hdr, (long) DUK_HEAPHDR_GET_TYPE(hdr)));
 
-	switch (DUK_HEAPHDR_GET_HTYPE(hdr)) {
-	case DUK_HTYPE_STRING_INTERNAL:
-	case DUK_HTYPE_STRING_EXTERNAL:
+	switch (DUK_HEAPHDR_GET_TYPE(hdr)) {
+	case DUK_HTYPE_STRING:
 		duk_free_hstring(heap, (duk_hstring *) hdr);
 		break;
-	case DUK_HTYPE_BUFFER_FIXED:
-	case DUK_HTYPE_BUFFER_DYNAMIC:
-	case DUK_HTYPE_BUFFER_EXTERNAL:
-		duk_free_hbuffer(heap, (duk_hbuffer *) hdr);
-		break;
-	default:
+	case DUK_HTYPE_OBJECT:
 		duk_free_hobject(heap, (duk_hobject *) hdr);
 		break;
+	default:
+		DUK_ASSERT(DUK_HEAPHDR_GET_TYPE(hdr) == DUK_HTYPE_BUFFER);
+		duk_free_hbuffer(heap, (duk_hbuffer *) hdr);
 	}
 }
 
@@ -291,14 +275,14 @@ DUK_LOCAL void duk__free_run_finalizers(duk_heap *heap) {
 		count_finalized = 0;
 		while (curr) {
 			count_all++;
-			if (DUK_HEAPHDR_IS_ANY_OBJECT(curr)) {
+			if (DUK_HEAPHDR_IS_OBJECT(curr)) {
 				/* Only objects in heap_allocated may have finalizers.  Check that
 				 * the object itself has a _Finalizer property (own or inherited)
 				 * so that we don't execute finalizers for e.g. Proxy objects.
 				 */
 				DUK_ASSERT(curr != NULL);
 
-				if (duk_hobject_has_finalizer_fast_raw(heap, (duk_hobject *) curr)) {
+				if (DUK_HOBJECT_HAS_FINALIZER_FAST(heap, (duk_hobject *) curr)) {
 					if (!DUK_HEAPHDR_HAS_FINALIZED((duk_heaphdr *) curr)) {
 						DUK_ASSERT(
 						    DUK_HEAP_HAS_FINALIZER_NORESCUE(heap)); /* maps to finalizer 2nd argument */
@@ -439,16 +423,12 @@ DUK_INTERNAL void duk_heap_free(duk_heap *heap) {
 
 	DUK_D(DUK_DPRINT("freeing heap structure: %p", (void *) heap));
 	heap->free_func(heap->heap_udata, heap);
-
-#if defined(DUK_USE_DEBUG) && (defined(DUK_USE_HEAPPTR_ENC16) || defined(DUK_USE_DATAPTR_ENC16) || defined(DUK_USE_FUNCPTR_ENC16))
-	duk_debug_global_heap_singleton = NULL;
-#endif
 }
 
 /*
  *  Allocate a heap.
  *
- *  String table is initialized with built-in strings from configure tooling
+ *  String table is initialized with built-in strings from genbuiltins.py,
  *  either by dynamically creating the strings or by referring to ROM strings.
  */
 
@@ -471,12 +451,12 @@ DUK_LOCAL duk_bool_t duk__init_heap_strings(duk_heap *heap) {
 
 		h = duk_rom_strings_lookup[i];
 		while (h != NULL) {
-			hash = duk_heap_hashstring(heap, (const duk_uint8_t *) duk_hstring_get_data(h), duk_hstring_get_bytelen(h));
+			hash = duk_heap_hashstring(heap, (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h), DUK_HSTRING_GET_BYTELEN(h));
 			DUK_DD(DUK_DDPRINT("duk_rom_strings_lookup[%d] -> hash 0x%08lx, computed 0x%08lx",
 			                   (int) i,
-			                   (unsigned long) duk_hstring_get_hash(h),
+			                   (unsigned long) DUK_HSTRING_GET_HASH(h),
 			                   (unsigned long) hash));
-			DUK_ASSERT(hash == (duk_uint32_t) duk_hstring_get_hash(h));
+			DUK_ASSERT(hash == (duk_uint32_t) DUK_HSTRING_GET_HASH(h));
 
 			h = (const duk_hstring *) h->hdr.h_next;
 		}
@@ -520,8 +500,6 @@ DUK_LOCAL duk_bool_t duk__init_heap_strings(duk_heap *heap) {
 		 */
 		if (i == DUK_STRIDX_EVAL || i == DUK_STRIDX_LC_ARGUMENTS) {
 			DUK_HSTRING_SET_EVAL_OR_ARGUMENTS(h);
-		} else if (i == DUK_STRIDX_LENGTH) {
-			DUK_HSTRING_SET_LENGTH(h);
 		}
 		if (i >= DUK_STRIDX_START_RESERVED && i < DUK_STRIDX_END_RESERVED) {
 			DUK_HSTRING_SET_RESERVED_WORD(h);
@@ -529,18 +507,7 @@ DUK_LOCAL duk_bool_t duk__init_heap_strings(duk_heap *heap) {
 				DUK_HSTRING_SET_STRICT_RESERVED_WORD(h);
 			}
 		}
-#if 1
-		/* Temporary hack for canonical number handling, detect the actual
-		 * forms that exist in fixed strings.
-		 */
-		if (DUK_HSTRING_HAS_ARRIDX(h) || (i == DUK_STRIDX_MINUS_ZERO)) {
-			DUK_HSTRING_SET_CANNUM(h);
-		}
-		if (duk_hstring_equals_ascii_cstring(h, "Infinity") || duk_hstring_equals_ascii_cstring(h, "-Infinity") ||
-		    duk_hstring_equals_ascii_cstring(h, "NaN")) {
-			DUK_HSTRING_SET_CANNUM(h);
-		}
-#endif
+
 		DUK_DDD(DUK_DDDPRINT("interned: %!O", (duk_heaphdr *) h));
 
 		/* XXX: The incref macro takes a thread pointer but doesn't
@@ -566,7 +533,7 @@ DUK_LOCAL duk_bool_t duk__init_heap_thread(duk_heap *heap) {
 	duk_hthread *thr;
 
 	DUK_D(DUK_DPRINT("heap init: alloc heap thread"));
-	thr = duk_hthread_alloc_unchecked(heap, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_THREAD));
+	thr = duk_hthread_alloc_unchecked(heap, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_THREAD));
 	if (thr == NULL) {
 		DUK_D(DUK_DPRINT("failed to alloc heap_thread"));
 		return 0;
@@ -596,7 +563,7 @@ DUK_LOCAL duk_bool_t duk__init_heap_thread(duk_heap *heap) {
 	duk_hthread_create_builtin_objects(thr);
 
 	/* default prototype */
-	duk_hobject_set_proto_init_incref(thr, (duk_hobject *) thr, thr->builtins[DUK_BIDX_THREAD_PROTOTYPE]);
+	DUK_HOBJECT_SET_PROTOTYPE_INIT_INCREF(thr, (duk_hobject *) thr, thr->builtins[DUK_BIDX_THREAD_PROTOTYPE]);
 
 	return 1;
 }
@@ -641,7 +608,7 @@ DUK_LOCAL void duk__dump_type_sizes(void) {
 	DUK__DUMPSZ(void *);
 	DUK__DUMPSZ(size_t);
 
-	/* basic types from duk_config.h */
+	/* basic types from duk_features.h */
 	DUK__DUMPSZ(duk_uint8_t);
 	DUK__DUMPSZ(duk_int8_t);
 	DUK__DUMPSZ(duk_uint16_t);
@@ -720,6 +687,7 @@ DUK_LOCAL void duk__dump_type_sizes(void) {
 	DUK__DUMPSZ(duk_hbuffer_external);
 	DUK__DUMPSZ(duk_propaccessor);
 	DUK__DUMPSZ(duk_propvalue);
+	DUK__DUMPSZ(duk_propdesc);
 	DUK__DUMPSZ(duk_heap);
 	DUK__DUMPSZ(duk_activation);
 	DUK__DUMPSZ(duk_catcher);
@@ -840,11 +808,9 @@ duk_heap *duk_heap_alloc(duk_alloc_function alloc_func,
 
 	DUK_ASSERT(DUK_USE_STRTAB_MINSIZE >= 64);
 
-	/* duk_tval.h */
-#if defined(DUK_USE_PACKED_TVAL)
-#else
-	DUK_ASSERT((DUK_TAG_UNDEFINED & (~0x01U)) == (DUK_TAG_NULL & (~0x01U))); /* Required by DUK_TVAL_IS_NULLISH(). */
-#endif
+	DUK_ASSERT((DUK_HTYPE_STRING & 0x01U) == 0);
+	DUK_ASSERT((DUK_HTYPE_BUFFER & 0x01U) == 0);
+	DUK_ASSERT((DUK_HTYPE_OBJECT & 0x01U) == 1); /* DUK_HEAPHDR_IS_OBJECT() relies ont his. */
 
 	/*
 	 *  Debug dump type sizes
@@ -930,17 +896,6 @@ duk_heap *duk_heap_alloc(duk_alloc_function alloc_func,
 	if (!res) {
 		goto failed;
 	}
-
-	/*
-	 *  When debugging with compressed pointers debug code needs the heap pointer
-	 *  to decompress pointers.  We don't pass it explicitly now in DUK_DPRINT()
-	 *  et al, but when debugging is enabled with compressed pointers we store one
-	 *  global heap reference to allow single-heap compressed pointer setups to use
-	 *  debug prints.
-	 */
-#if defined(DUK_USE_DEBUG) && (defined(DUK_USE_HEAPPTR_ENC16) || defined(DUK_USE_DATAPTR_ENC16) || defined(DUK_USE_FUNCPTR_ENC16))
-	duk_debug_global_heap_singleton = res;
-#endif
 
 	/*
 	 *  Zero the struct, and start initializing roughly in order
@@ -1167,7 +1122,7 @@ duk_heap *duk_heap_alloc(duk_alloc_function alloc_func,
 	DUK_ASSERT(res->heap_thread != NULL);
 	res->heap_object = duk_hobject_alloc_unchecked(res,
 	                                               DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS |
-	                                                   DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_OBJECT));
+	                                                   DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_OBJECT));
 	if (res->heap_object == NULL) {
 		goto failed;
 	}
@@ -1259,10 +1214,6 @@ failed:
 		DUK_ASSERT(res->free_func != NULL);
 		duk_heap_free(res);
 	}
-
-#if defined(DUK_USE_DEBUG) && (defined(DUK_USE_HEAPPTR_ENC16) || defined(DUK_USE_DATAPTR_ENC16) || defined(DUK_USE_FUNCPTR_ENC16))
-	duk_debug_global_heap_singleton = NULL;
-#endif
 
 	return NULL;
 }

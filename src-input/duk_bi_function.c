@@ -14,8 +14,6 @@ DUK_INTERNAL duk_ret_t duk_bi_function_prototype(duk_hthread *thr) {
 #if defined(DUK_USE_FUNCTION_BUILTIN)
 DUK_INTERNAL duk_ret_t duk_bi_function_constructor(duk_hthread *thr) {
 	duk_hstring *h_sourcecode;
-	const duk_uint8_t *source_data;
-	size_t source_blen;
 	duk_idx_t nargs;
 	duk_idx_t i;
 	duk_small_uint_t comp_flags;
@@ -66,8 +64,10 @@ DUK_INTERNAL duk_ret_t duk_bi_function_constructor(duk_hthread *thr) {
 
 	duk_push_hstring_stridx(thr, DUK_STRIDX_COMPILE); /* XXX: copy from caller? */ /* XXX: ignored now */
 	h_sourcecode = duk_require_hstring(thr, -2); /* no symbol check needed; -2 is concat'd code */
-	source_data = duk_hstring_get_data_and_bytelen(h_sourcecode, &source_blen);
-	duk_js_compile(thr, source_data, source_blen, comp_flags);
+	duk_js_compile(thr,
+	               (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h_sourcecode),
+	               (duk_size_t) DUK_HSTRING_GET_BYTELEN(h_sourcecode),
+	               comp_flags);
 
 	/* Force .name to 'anonymous' (ES2015). */
 	duk_push_literal(thr, "anonymous");
@@ -239,7 +239,7 @@ DUK_INTERNAL duk_ret_t duk_bi_function_prototype_bind(duk_hthread *thr) {
 	DUK_ASSERT(DUK_TVAL_IS_UNDEFINED(&h_bound->this_binding));
 	DUK_ASSERT(h_bound->args == NULL);
 	DUK_ASSERT(h_bound->nargs == 0);
-	DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, (duk_hobject *) h_bound) == NULL);
+	DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, (duk_hobject *) h_bound) == NULL);
 
 	/* [ thisArg arg1 ... argN func boundFunc ] */
 
@@ -266,8 +266,8 @@ DUK_INTERNAL duk_ret_t duk_bi_function_prototype_bind(duk_hthread *thr) {
 		 * For lightfuncs Function.prototype is used and is already
 		 * in place.
 		 */
-		bound_proto = duk_hobject_get_proto_raw(thr->heap, h_target);
-		duk_hobject_set_proto_init_incref(thr, (duk_hobject *) h_bound, bound_proto);
+		bound_proto = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, h_target);
+		DUK_HOBJECT_SET_PROTOTYPE_INIT_INCREF(thr, (duk_hobject *) h_bound, bound_proto);
 
 		/* The 'strict' flag is copied to get the special [[Get]] of E5.1
 		 * Section 15.3.5.4 to apply when a 'caller' value is a strict bound
@@ -305,7 +305,7 @@ DUK_INTERNAL duk_ret_t duk_bi_function_prototype_bind(duk_hthread *thr) {
 		DUK_ASSERT(DUK_TVAL_IS_LIGHTFUNC(tv_tmp));
 		DUK_HOBJECT_SET_STRICT((duk_hobject *) h_bound);
 		bound_proto = thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE];
-		duk_hobject_set_proto_init_incref(thr, (duk_hobject *) h_bound, bound_proto);
+		DUK_HOBJECT_SET_PROTOTYPE_INIT_INCREF(thr, (duk_hobject *) h_bound, bound_proto);
 	}
 
 	DUK_TVAL_INCREF(thr, &h_bound->target); /* old values undefined, no decref needed */
@@ -350,11 +350,10 @@ DUK_INTERNAL duk_ret_t duk_bi_function_prototype_bind(duk_hthread *thr) {
 	DUK_TVAL_SET_U32(tv_tmp, (duk_uint32_t) bound_len); /* in-place update, fastint */
 	duk_xdef_prop_stridx_short(thr, -2, DUK_STRIDX_LENGTH, DUK_PROPDESC_FLAGS_C); /* attrs in E6 Section 9.2.4 */
 
-#if 0 /* Now inherited from Function.prototype, for both strict and non-strict functions. */
+	/* XXX: could these be virtual? */
 	/* Caller and arguments must use the same thrower, [[ThrowTypeError]]. */
 	duk_xdef_prop_stridx_thrower(thr, -1, DUK_STRIDX_CALLER);
 	duk_xdef_prop_stridx_thrower(thr, -1, DUK_STRIDX_LC_ARGUMENTS);
-#endif
 
 	/* Function name and fileName (non-standard). */
 	duk_push_literal(thr, "bound "); /* ES2015 19.2.3.2. */
@@ -443,12 +442,12 @@ fail_type:
 }
 
 #if defined(DUK_USE_SYMBOL_BUILTIN)
-/* Function.prototype[@@hasInstance]. */
 DUK_INTERNAL duk_ret_t duk_bi_function_prototype_hasinstance(duk_hthread *thr) {
 	/* This binding: RHS, stack index 0: LHS. */
 	duk_bool_t ret;
 
 	ret = duk_js_instanceof_ordinary(thr, DUK_GET_TVAL_POSIDX(thr, 0), DUK_GET_THIS_TVAL_PTR(thr));
-	return duk_push_boolean_return1(thr, ret);
+	duk_push_boolean(thr, ret);
+	return 1;
 }
 #endif /* DUK_USE_SYMBOL_BUILTIN */

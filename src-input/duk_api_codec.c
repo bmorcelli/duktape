@@ -125,13 +125,9 @@ DUK_LOCAL DUK_ALWAYS_INLINE void duk__base64_encode_fast_2(const duk_uint8_t *sr
 
 	t = (duk_uint_t) src[0];
 	t = (t << 8) + (duk_uint_t) src[1];
-
-	/* XXXXXX-- -------- */
-	/* ------XX XXXX---- */
-	/* -------- ----XXXX */
-	dst[0] = duk__base64_enctab_fast[t >> 10];
-	dst[1] = duk__base64_enctab_fast[(t >> 4) & 0x3fU];
-	dst[2] = duk__base64_enctab_fast[(t << 2) & 0x3fU];
+	dst[0] = duk__base64_enctab_fast[t >> 10]; /* XXXXXX-- -------- */
+	dst[1] = duk__base64_enctab_fast[(t >> 4) & 0x3fU]; /* ------XX XXXX---- */
+	dst[2] = duk__base64_enctab_fast[(t << 2) & 0x3fU]; /* -------- ----XXXX */
 	dst[3] = DUK_ASC_EQUALS;
 }
 
@@ -139,11 +135,8 @@ DUK_LOCAL DUK_ALWAYS_INLINE void duk__base64_encode_fast_1(const duk_uint8_t *sr
 	duk_uint_t t;
 
 	t = (duk_uint_t) src[0];
-
-	/* XXXXXX-- */
-	/* ------XX */
-	dst[0] = duk__base64_enctab_fast[t >> 2];
-	dst[1] = duk__base64_enctab_fast[(t << 4) & 0x3fU];
+	dst[0] = duk__base64_enctab_fast[t >> 2]; /* XXXXXX-- */
+	dst[1] = duk__base64_enctab_fast[(t << 4) & 0x3fU]; /* ------XX */
 	dst[2] = DUK_ASC_EQUALS;
 	dst[3] = DUK_ASC_EQUALS;
 }

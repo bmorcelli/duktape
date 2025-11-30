@@ -14,10 +14,11 @@
  *  Heap flags
  */
 
-#define DUK_HEAP_FLAG_MARKANDSWEEP_RECLIMIT_REACHED (1U << 0) /* marking reached a recursion limit, must use multi-pass marking */
-#define DUK_HEAP_FLAG_INTERRUPT_RUNNING             (1U << 1) /* executor interrupt running (used to avoid nested interrupts) */
-#define DUK_HEAP_FLAG_FINALIZER_NORESCUE            (1U << 2) /* heap destruction ongoing, finalizer rescue no longer possible */
-#define DUK_HEAP_FLAG_DEBUGGER_PAUSED               (1U << 3) /* debugger is paused: talk with debug client until step/resume */
+#define DUK_HEAP_FLAG_MARKANDSWEEP_RECLIMIT_REACHED \
+	(1U << 0) /* mark-and-sweep marking reached a recursion limit and must use multi-pass marking */
+#define DUK_HEAP_FLAG_INTERRUPT_RUNNING  (1U << 1) /* executor interrupt running (used to avoid nested interrupts) */
+#define DUK_HEAP_FLAG_FINALIZER_NORESCUE (1U << 2) /* heap destruction ongoing, finalizer rescue no longer possible */
+#define DUK_HEAP_FLAG_DEBUGGER_PAUSED    (1U << 3) /* debugger is paused: talk with debug client until step/resume */
 
 #define DUK__HEAP_HAS_FLAGS(heap, bits) ((heap)->flags & (bits))
 #define DUK__HEAP_SET_FLAGS(heap, bits) \
@@ -244,14 +245,18 @@ typedef void *(*duk_mem_getptr)(duk_heap *heap, void *ud);
  *  Memory constants
  */
 
-/* Retry allocation after mark-and-sweep for this many times.  A single mark-and-sweep round is
- * not guaranteed to free all unreferenced memory because of finalization (in fact, ANY number
- * of rounds is strictly not enough).
- */
-#define DUK_HEAP_ALLOC_FAIL_MARKANDSWEEP_LIMIT 10
+#define DUK_HEAP_ALLOC_FAIL_MARKANDSWEEP_LIMIT \
+	10 /* Retry allocation after mark-and-sweep for this \
+	    * many times.  A single mark-and-sweep round is \
+	    * not guaranteed to free all unreferenced memory \
+	    * because of finalization (in fact, ANY number of \
+	    * rounds is strictly not enough). \
+	    */
 
-/* Starting from this round, use emergency mode for mark-and-sweep. */
-#define DUK_HEAP_ALLOC_FAIL_MARKANDSWEEP_EMERGENCY_LIMIT 3
+#define DUK_HEAP_ALLOC_FAIL_MARKANDSWEEP_EMERGENCY_LIMIT \
+	3 /* Starting from this round, use emergency mode \
+	   * for mark-and-sweep. \
+	   */
 
 /*
  *  Debugger support
@@ -296,7 +301,7 @@ struct duk_breakpoint {
  */
 
 struct duk_strcache_entry {
-	duk_hstring *h; /* weak pointer */
+	duk_hstring *h;
 	duk_uint32_t bidx;
 	duk_uint32_t cidx;
 };
@@ -607,7 +612,6 @@ struct duk_heap {
 	/* Stats. */
 #if defined(DUK_USE_DEBUG)
 	duk_int_t stats_exec_opcodes;
-	duk_int_t stats_exec_opcode[256];
 	duk_int_t stats_exec_interrupt;
 	duk_int_t stats_exec_throw;
 	duk_int_t stats_call_all;
@@ -619,8 +623,6 @@ struct duk_heap {
 	duk_int_t stats_ms_try_count;
 	duk_int_t stats_ms_skip_count;
 	duk_int_t stats_ms_emergency_count;
-	duk_int_t stats_strtab_intern_notemp;
-	duk_int_t stats_strtab_intern_temp;
 	duk_int_t stats_strtab_intern_hit;
 	duk_int_t stats_strtab_intern_miss;
 	duk_int_t stats_strtab_resize_check;
@@ -629,19 +631,8 @@ struct duk_heap {
 	duk_int_t stats_strtab_litcache_hit;
 	duk_int_t stats_strtab_litcache_miss;
 	duk_int_t stats_strtab_litcache_pin;
-	duk_int_t stats_object_realloc_strprops;
-	duk_int_t stats_object_realloc_idxprops;
+	duk_int_t stats_object_realloc_props;
 	duk_int_t stats_object_abandon_array;
-
-	duk_int_t stats_getvalue_strkey_count;
-	duk_int_t stats_getvalue_idxkey_count;
-	duk_int_t stats_get_strkey_count;
-	duk_int_t stats_get_idxkey_count;
-	duk_int_t stats_putvalue_strkey_count;
-	duk_int_t stats_putvalue_idxkey_count;
-	duk_int_t stats_set_strkey_count;
-	duk_int_t stats_set_idxkey_count;
-
 	duk_int_t stats_getownpropdesc_count;
 	duk_int_t stats_getownpropdesc_hit;
 	duk_int_t stats_getownpropdesc_miss;
@@ -723,11 +714,9 @@ DUK_INTERNAL void duk_heap_strtable_dump(duk_heap *heap);
 #endif
 
 DUK_INTERNAL_DECL void duk_heap_strcache_string_remove(duk_heap *heap, duk_hstring *h);
-DUK_INTERNAL_DECL void duk_strcache_scan_char2byte_wtf8(duk_hthread *thr,
-                                                        duk_hstring *h,
-                                                        duk_uint32_t target_charoff,
-                                                        duk_uint32_t *out_byteoff,
-                                                        duk_uint32_t *out_charoff);
+DUK_INTERNAL_DECL duk_uint_fast32_t duk_heap_strcache_offset_char2byte(duk_hthread *thr,
+                                                                       duk_hstring *h,
+                                                                       duk_uint_fast32_t char_offset);
 
 #if defined(DUK_USE_PROVIDE_DEFAULT_ALLOC_FUNCTIONS)
 DUK_INTERNAL_DECL void *duk_default_alloc_function(void *udata, duk_size_t size);
@@ -753,9 +742,5 @@ DUK_INTERNAL_DECL void duk_heap_process_finalize_list(duk_heap *heap);
 DUK_INTERNAL_DECL void duk_heap_mark_and_sweep(duk_heap *heap, duk_small_uint_t flags);
 
 DUK_INTERNAL_DECL duk_uint32_t duk_heap_hashstring(duk_heap *heap, const duk_uint8_t *str, duk_size_t len);
-
-#if defined(DUK_USE_DEBUG) && (defined(DUK_USE_HEAPPTR_ENC16) || defined(DUK_USE_DATAPTR_ENC16) || defined(DUK_USE_FUNCPTR_ENC16))
-DUK_INTERNAL_DECL duk_heap *duk_debug_global_heap_singleton;
-#endif
 
 #endif /* DUK_HEAP_H_INCLUDED */

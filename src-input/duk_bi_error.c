@@ -16,7 +16,7 @@ DUK_INTERNAL duk_ret_t duk_bi_error_constructor_shared(duk_hthread *thr) {
 
 	/* same for both error and each subclass like TypeError */
 	duk_uint_t flags_and_class =
-	    DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS | DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_ERROR);
+	    DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS | DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_ERROR);
 
 	(void) duk_push_object_helper(thr, flags_and_class, bidx_prototype);
 
@@ -127,7 +127,7 @@ DUK_LOCAL duk_ret_t duk__error_getter_helper(duk_hthread *thr, duk_small_int_t o
 
 	duk_push_this(thr);
 	duk_xget_owndataprop_stridx_short(thr, -1, DUK_STRIDX_INT_TRACEDATA);
-	idx_td = duk_get_top_index_known(thr);
+	idx_td = duk_get_top_index(thr);
 
 	duk_push_hstring_stridx(thr, DUK_STRIDX_NEWLINE_4SPACE);
 	duk_push_this(thr);
@@ -197,7 +197,7 @@ DUK_LOCAL duk_ret_t duk__error_getter_helper(duk_hthread *thr, duk_small_int_t o
 				h_name = duk_get_hstring_notsymbol(thr, -2); /* may be NULL */
 				funcname = (h_name == NULL || h_name == DUK_HTHREAD_STRING_EMPTY_STRING(thr)) ?
                                                "[anon]" :
-                                               (const char *) duk_hstring_get_data(h_name);
+                                               (const char *) DUK_HSTRING_GET_DATA(h_name);
 				filename = duk_get_string_notsymbol(thr, -1);
 				filename = filename ? filename : "";
 				DUK_ASSERT(funcname != NULL);

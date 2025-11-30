@@ -8,13 +8,6 @@
  *  Allocate memory with garbage collection.
  */
 
-DUK_LOCAL duk_bool_t duk__heap_suppress_debuglog(duk_heap *heap) {
-	/* Suppress debug logging in heap init, the heap->heap_object
-	 * test approximately matches init.
-	 */
-	return heap->heap_object == NULL;
-}
-
 /* Slow path: voluntary GC triggered, first alloc attempt failed, or zero size. */
 DUK_LOCAL DUK_NOINLINE_PERF DUK_COLD void *duk__heap_mem_alloc_slowpath(duk_heap *heap, duk_size_t size) {
 	void *res;
@@ -25,14 +18,11 @@ DUK_LOCAL DUK_NOINLINE_PERF DUK_COLD void *duk__heap_mem_alloc_slowpath(duk_heap
 	DUK_ASSERT_DISABLE(size >= 0);
 
 	if (size == 0) {
-		DUK_DD(DUK_DDPRINT("zero size alloc in slow path, return NULL"));
+		DUK_D(DUK_DPRINT("zero size alloc in slow path, return NULL"));
 		return NULL;
 	}
 
-	if (!duk__heap_suppress_debuglog(heap)) {
-		/* heap_object check suppresses logging in heap init */
-		DUK_D(DUK_DPRINT("first alloc attempt failed or voluntary GC limit reached, attempt to gc and retry"));
-	}
+	DUK_D(DUK_DPRINT("first alloc attempt failed or voluntary GC limit reached, attempt to gc and retry"));
 
 #if 0
 	/*
@@ -67,11 +57,9 @@ DUK_LOCAL DUK_NOINLINE_PERF DUK_COLD void *duk__heap_mem_alloc_slowpath(duk_heap
 		DUK_ASSERT(size > 0);
 		res = heap->alloc_func(heap->heap_udata, size);
 		if (res != NULL) {
-			if (!duk__heap_suppress_debuglog(heap)) {
-				DUK_D(DUK_DPRINT("duk_heap_mem_alloc() succeeded after gc (pass %ld), alloc size %ld",
-				                 (long) (i + 1),
-				                 (long) size));
-			}
+			DUK_D(DUK_DPRINT("duk_heap_mem_alloc() succeeded after gc (pass %ld), alloc size %ld",
+			                 (long) (i + 1),
+			                 (long) size));
 			return res;
 		}
 	}
@@ -118,11 +106,9 @@ DUK_INTERNAL DUK_INLINE_PERF DUK_HOT void *duk_heap_mem_alloc(duk_heap *heap, du
 slowpath:
 
 	if (size == 0) {
-		DUK_DD(DUK_DDPRINT("first alloc attempt returned NULL for zero size alloc, use slow path to deal with it"));
+		DUK_D(DUK_DPRINT("first alloc attempt returned NULL for zero size alloc, use slow path to deal with it"));
 	} else {
-		if (!duk__heap_suppress_debuglog(heap)) {
-			DUK_D(DUK_DPRINT("first alloc attempt failed, attempt to gc and retry"));
-		}
+		DUK_D(DUK_DPRINT("first alloc attempt failed, attempt to gc and retry"));
 	}
 	return duk__heap_mem_alloc_slowpath(heap, size);
 }
@@ -194,9 +180,7 @@ DUK_LOCAL DUK_NOINLINE_PERF DUK_COLD void *duk__heap_mem_realloc_slowpath(duk_he
 
 	/* Unlike for malloc(), zero size NULL result check happens at the call site. */
 
-	if (!duk__heap_suppress_debuglog(heap)) {
-		DUK_D(DUK_DPRINT("first realloc attempt failed or voluntary GC limit reached, attempt to gc and retry"));
-	}
+	DUK_D(DUK_DPRINT("first realloc attempt failed, attempt to gc and retry"));
 
 #if 0
 	/*
@@ -227,11 +211,9 @@ DUK_LOCAL DUK_NOINLINE_PERF DUK_COLD void *duk__heap_mem_realloc_slowpath(duk_he
 
 		res = heap->realloc_func(heap->heap_udata, ptr, newsize);
 		if (res != NULL || newsize == 0) {
-			if (!duk__heap_suppress_debuglog(heap)) {
-				DUK_D(DUK_DPRINT("duk_heap_mem_realloc() succeeded after gc (pass %ld), alloc size %ld",
-				                 (long) (i + 1),
-				                 (long) newsize));
-			}
+			DUK_D(DUK_DPRINT("duk_heap_mem_realloc() succeeded after gc (pass %ld), alloc size %ld",
+			                 (long) (i + 1),
+			                 (long) newsize));
 			return res;
 		}
 	}
@@ -302,9 +284,7 @@ DUK_LOCAL DUK_NOINLINE_PERF DUK_COLD void *duk__heap_mem_realloc_indirect_slowpa
 
 	/* Unlike for malloc(), zero size NULL result check happens at the call site. */
 
-	if (!duk__heap_suppress_debuglog(heap)) {
-		DUK_D(DUK_DPRINT("first indirect realloc attempt failed, attempt to gc and retry"));
-	}
+	DUK_D(DUK_DPRINT("first indirect realloc attempt failed, attempt to gc and retry"));
 
 #if 0
 	/*
@@ -355,11 +335,9 @@ DUK_LOCAL DUK_NOINLINE_PERF DUK_COLD void *duk__heap_mem_realloc_indirect_slowpa
 
 		res = heap->realloc_func(heap->heap_udata, cb(heap, ud), newsize);
 		if (res != NULL || newsize == 0) {
-			if (!duk__heap_suppress_debuglog(heap)) {
-				DUK_D(DUK_DPRINT("duk_heap_mem_realloc_indirect() succeeded after gc (pass %ld), alloc size %ld",
-				                 (long) (i + 1),
-				                 (long) newsize));
-			}
+			DUK_D(DUK_DPRINT("duk_heap_mem_realloc_indirect() succeeded after gc (pass %ld), alloc size %ld",
+			                 (long) (i + 1),
+			                 (long) newsize));
 			return res;
 		}
 	}

@@ -3,8 +3,7 @@
  *
  *  Provides primitive allocation functions for all object types (plain object,
  *  compiled function, native function, thread).  The object return is not yet
- *  in "heap allocated" list and has a refcount of zero, so caller must careful
- *  with e.g. side effects.
+ *  in "heap allocated" list and has a refcount of zero, so caller must careful.
  */
 
 /* XXX: In most cases there's no need for plain allocation without pushing
@@ -21,11 +20,12 @@ DUK_LOCAL void duk__init_object_parts(duk_heap *heap, duk_uint_t hobject_flags, 
 	DUK_ASSERT(obj != NULL);
 	/* Zeroed by caller. */
 
-	obj->hdr.h_flags = hobject_flags;
+	obj->hdr.h_flags = hobject_flags | DUK_HTYPE_OBJECT;
+	DUK_ASSERT(DUK_HEAPHDR_GET_TYPE(&obj->hdr) == DUK_HTYPE_OBJECT); /* Assume zero shift. */
 
 #if defined(DUK_USE_EXPLICIT_NULL_INIT)
-	duk_hobject_set_proto_raw(heap, obj, NULL);
-	duk_hobject_set_strprops(heap, obj, NULL);
+	DUK_HOBJECT_SET_PROTOTYPE(heap, obj, NULL);
+	DUK_HOBJECT_SET_PROPS(heap, obj, NULL);
 #endif
 #if defined(DUK_USE_HEAPPTR16)
 	/* Zero encoded pointer is required to match NULL. */
@@ -90,7 +90,6 @@ DUK_INTERNAL duk_hobject *duk_hobject_alloc(duk_hthread *thr, duk_uint_t hobject
 	duk_hobject *res;
 
 	res = (duk_hobject *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_hobject));
-	DUK_ASSERT(DUK_HEAPHDR_IS_ANY_OBJECT((duk_heaphdr *) res));
 	return res;
 }
 
@@ -98,7 +97,6 @@ DUK_INTERNAL duk_hcompfunc *duk_hcompfunc_alloc(duk_hthread *thr, duk_uint_t hob
 	duk_hcompfunc *res;
 
 	res = (duk_hcompfunc *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_hcompfunc));
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(res) == DUK_HTYPE_COMPFUNC);
 #if defined(DUK_USE_EXPLICIT_NULL_INIT)
 #if defined(DUK_USE_HEAPPTR16)
 	/* NULL pointer is required to encode to zero, so memset is enough. */
@@ -118,7 +116,6 @@ DUK_INTERNAL duk_hnatfunc *duk_hnatfunc_alloc(duk_hthread *thr, duk_uint_t hobje
 	duk_hnatfunc *res;
 
 	res = (duk_hnatfunc *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_hnatfunc));
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(res) == DUK_HTYPE_NATFUNC);
 #if defined(DUK_USE_EXPLICIT_NULL_INIT)
 	res->func = NULL;
 #endif
@@ -152,7 +149,6 @@ DUK_INTERNAL duk_hbufobj *duk_hbufobj_alloc(duk_hthread *thr, duk_uint_t hobject
 	duk_hbufobj *res;
 
 	res = (duk_hbufobj *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_hbufobj));
-	DUK_ASSERT(DUK_HEAPHDR_IS_ANY_BUFOBJ((duk_heaphdr *) res));
 #if defined(DUK_USE_EXPLICIT_NULL_INIT)
 	res->buf = NULL;
 	res->buf_prop = NULL;
@@ -228,8 +224,7 @@ DUK_INTERNAL duk_harray *duk_harray_alloc(duk_hthread *thr, duk_uint_t hobject_f
 
 	res = (duk_harray *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_harray));
 
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(res) == DUK_HTYPE_ARRAY || DUK_HOBJECT_GET_HTYPE(res) == DUK_HTYPE_ARGUMENTS);
-	DUK_ASSERT(DUK_HARRAY_GET_LENGTH(res) == 0);
+	DUK_ASSERT(res->length == 0);
 
 	return res;
 }
@@ -238,7 +233,6 @@ DUK_INTERNAL duk_hdecenv *duk_hdecenv_alloc(duk_hthread *thr, duk_uint_t hobject
 	duk_hdecenv *res;
 
 	res = (duk_hdecenv *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_hdecenv));
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(res) == DUK_HTYPE_DECENV);
 #if defined(DUK_USE_EXPLICIT_NULL_INIT)
 	res->thread = NULL;
 	res->varmap = NULL;
@@ -255,7 +249,6 @@ DUK_INTERNAL duk_hobjenv *duk_hobjenv_alloc(duk_hthread *thr, duk_uint_t hobject
 	duk_hobjenv *res;
 
 	res = (duk_hobjenv *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_hobjenv));
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(res) == DUK_HTYPE_OBJENV);
 #if defined(DUK_USE_EXPLICIT_NULL_INIT)
 	res->target = NULL;
 #endif
@@ -269,7 +262,6 @@ DUK_INTERNAL duk_hproxy *duk_hproxy_alloc(duk_hthread *thr, duk_uint_t hobject_f
 	duk_hproxy *res;
 
 	res = (duk_hproxy *) duk__hobject_alloc_init(thr, hobject_flags, sizeof(duk_hproxy));
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(res) == DUK_HTYPE_PROXY);
 
 	/* Leave ->target and ->handler uninitialized, as caller will always
 	 * explicitly initialize them before any side effects are possible.

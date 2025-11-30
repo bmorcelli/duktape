@@ -115,18 +115,16 @@ DUK_LOCAL int duk__transform_helper(duk_hthread *thr, duk__transform_callback ca
 	duk__transform_context tfm_ctx_alloc;
 	duk__transform_context *tfm_ctx = &tfm_ctx_alloc;
 	duk_codepoint_t cp;
-	duk_size_t input_blen;
 
 	tfm_ctx->thr = thr;
 
 	tfm_ctx->h_str = duk_to_hstring(thr, 0);
 	DUK_ASSERT(tfm_ctx->h_str != NULL);
 
-	input_blen = duk_hstring_get_bytelen(tfm_ctx->h_str);
-	DUK_BW_INIT_PUSHBUF(thr, &tfm_ctx->bw, input_blen); /* initial size guess */
+	DUK_BW_INIT_PUSHBUF(thr, &tfm_ctx->bw, DUK_HSTRING_GET_BYTELEN(tfm_ctx->h_str)); /* initial size guess */
 
-	tfm_ctx->p_start = duk_hstring_get_data(tfm_ctx->h_str);
-	tfm_ctx->p_end = tfm_ctx->p_start + input_blen;
+	tfm_ctx->p_start = DUK_HSTRING_GET_DATA(tfm_ctx->h_str);
+	tfm_ctx->p_end = tfm_ctx->p_start + DUK_HSTRING_GET_BYTELEN(tfm_ctx->h_str);
 	tfm_ctx->p = tfm_ctx->p_start;
 
 	while (tfm_ctx->p < tfm_ctx->p_end) {
@@ -136,7 +134,6 @@ DUK_LOCAL int duk__transform_helper(duk_hthread *thr, duk__transform_callback ca
 
 	DUK_BW_COMPACT(thr, &tfm_ctx->bw);
 
-	/* WTF-8 sanitization happens in the buffer-to-string conversion at the latest. */
 	(void) duk_buffer_to_string(thr, -1); /* Safe if transform is safe. */
 	return 1;
 }
@@ -182,7 +179,6 @@ DUK_LOCAL void duk__transform_callback_encode_uri(duk__transform_context *tfm_ct
 		 * back because of strict UTF-8 checks in URI decoding.
 		 * (However, we could just as well allow them here.)
 		 */
-
 		goto uri_error;
 	} else {
 		/* Non-BMP characters within valid UTF-8 range: encode as is.
@@ -485,7 +481,7 @@ DUK_INTERNAL duk_ret_t duk_bi_global_object_eval(duk_hthread *thr) {
 	}
 
 	duk_push_hstring_stridx(thr, DUK_STRIDX_INPUT); /* XXX: copy from caller? */
-	duk_js_compile(thr, (const duk_uint8_t *) duk_hstring_get_data(h), (duk_size_t) duk_hstring_get_bytelen(h), comp_flags);
+	duk_js_compile(thr, (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h), (duk_size_t) DUK_HSTRING_GET_BYTELEN(h), comp_flags);
 	func = (duk_hcompfunc *) duk_known_hobject(thr, -1);
 	DUK_ASSERT(DUK_HOBJECT_IS_COMPFUNC((duk_hobject *) func));
 
@@ -519,12 +515,13 @@ DUK_INTERNAL duk_ret_t duk_bi_global_object_eval(duk_hthread *thr) {
 			act_lex_env = act_caller->lex_env;
 
 			new_env =
-			    duk_hdecenv_alloc(thr, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_DECENV));
+			    duk_hdecenv_alloc(thr,
+			                      DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_DECENV));
 			DUK_ASSERT(new_env != NULL);
 			duk_push_hobject(thr, (duk_hobject *) new_env);
 
-			DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, (duk_hobject *) new_env) == NULL);
-			duk_hobject_set_proto_raw(thr->heap, (duk_hobject *) new_env, act_lex_env);
+			DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, (duk_hobject *) new_env) == NULL);
+			DUK_HOBJECT_SET_PROTOTYPE(thr->heap, (duk_hobject *) new_env, act_lex_env);
 			DUK_HOBJECT_INCREF_ALLOWNULL(thr, act_lex_env);
 			DUK_DDD(DUK_DDDPRINT("new_env allocated: %!iO", (duk_heaphdr *) new_env));
 
@@ -669,14 +666,16 @@ DUK_INTERNAL duk_ret_t duk_bi_global_object_parse_float(duk_hthread *thr) {
 #if defined(DUK_USE_GLOBAL_BUILTIN)
 DUK_INTERNAL duk_ret_t duk_bi_global_object_is_nan(duk_hthread *thr) {
 	duk_double_t d = duk_to_number(thr, 0);
-	return duk_push_boolean_return1(thr, (duk_bool_t) DUK_ISNAN(d));
+	duk_push_boolean(thr, (duk_bool_t) DUK_ISNAN(d));
+	return 1;
 }
 #endif /* DUK_USE_GLOBAL_BUILTIN */
 
 #if defined(DUK_USE_GLOBAL_BUILTIN)
 DUK_INTERNAL duk_ret_t duk_bi_global_object_is_finite(duk_hthread *thr) {
 	duk_double_t d = duk_to_number(thr, 0);
-	return duk_push_boolean_return1(thr, (duk_bool_t) DUK_ISFINITE(d));
+	duk_push_boolean(thr, (duk_bool_t) DUK_ISFINITE(d));
+	return 1;
 }
 #endif /* DUK_USE_GLOBAL_BUILTIN */
 

@@ -24,6 +24,10 @@
  *  efficiently by creating a property allocation for a certain size and
  *  filling in keys and values directly (and INCREFing both with "bulk incref"
  *  primitives.
+ *
+ *  XXX: duk_hobject_getprop() and duk_hobject_putprop() calls are a bit
+ *  awkward (especially because they follow the prototype chain); rework
+ *  if "raw" own property helpers are added.
  */
 
 #include "duk_internal.h"
@@ -139,7 +143,7 @@ void duk_js_push_closure(duk_hthread *thr,
 
 	fun_clos = duk_push_hcompfunc(thr);
 	DUK_ASSERT(fun_clos != NULL);
-	DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, (duk_hobject *) fun_clos) == thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
+	DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, (duk_hobject *) fun_clos) == thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
 
 	duk_push_hobject(thr, &fun_temp->obj); /* -> [ ... closure template ] */
 
@@ -175,9 +179,9 @@ void duk_js_push_closure(duk_hthread *thr,
 	 * other value here now (used code has no access to the template).
 	 * Prototype is set by duk_push_hcompfunc().
 	 */
-	DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, &fun_clos->obj) == thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
+	DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, &fun_clos->obj) == thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
 #if 0
-	duk_hobject_set_proto_raw_updref(thr, &fun_clos->obj, thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
+	DUK_HOBJECT_SET_PROTOTYPE_UPDREF(thr, &fun_clos->obj, thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
 #endif
 
 	/* Copy duk_hobject flags as is from the template using a mask.
@@ -197,6 +201,7 @@ void duk_js_push_closure(duk_hthread *thr,
 	DUK_ASSERT(DUK_HOBJECT_HAS_COMPFUNC(&fun_clos->obj));
 	DUK_ASSERT(!DUK_HOBJECT_HAS_NATFUNC(&fun_clos->obj));
 	DUK_ASSERT(!DUK_HOBJECT_IS_THREAD(&fun_clos->obj));
+	/* DUK_HOBJECT_FLAG_ARRAY_PART: don't care */
 	/* DUK_HOBJECT_FLAG_NEWENV: handled below */
 	DUK_ASSERT(!DUK_HOBJECT_HAS_EXOTIC_ARRAY(&fun_clos->obj));
 	DUK_ASSERT(!DUK_HOBJECT_HAS_EXOTIC_STRINGOBJ(&fun_clos->obj));
@@ -249,12 +254,13 @@ void duk_js_push_closure(duk_hthread *thr,
 
 			/* -> [ ... closure template env ] */
 			new_env =
-			    duk_hdecenv_alloc(thr, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_DECENV));
+			    duk_hdecenv_alloc(thr,
+			                      DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_DECENV));
 			DUK_ASSERT(new_env != NULL);
 			duk_push_hobject(thr, (duk_hobject *) new_env);
 
-			DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, (duk_hobject *) new_env) == NULL);
-			duk_hobject_set_proto_raw(thr->heap, (duk_hobject *) new_env, proto);
+			DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, (duk_hobject *) new_env) == NULL);
+			DUK_HOBJECT_SET_PROTOTYPE(thr->heap, (duk_hobject *) new_env, proto);
 			DUK_HOBJECT_INCREF_ALLOWNULL(thr, proto);
 
 			DUK_ASSERT(new_env->thread == NULL); /* Closed. */
@@ -281,7 +287,7 @@ void duk_js_push_closure(duk_hthread *thr,
 			DUK_HCOMPFUNC_SET_VARENV(thr->heap, fun_clos, (duk_hobject *) new_env);
 			DUK_HOBJECT_INCREF(thr, (duk_hobject *) new_env);
 			DUK_HOBJECT_INCREF(thr, (duk_hobject *) new_env);
-			duk_pop_known(thr);
+			duk_pop_unsafe(thr);
 
 			/* [ ... closure template ] */
 		} else
@@ -350,7 +356,7 @@ void duk_js_push_closure(duk_hthread *thr,
 			duk_xdef_prop_stridx_short(thr, -3, stridx, DUK_PROPDESC_FLAGS_C);
 		} else {
 			DUK_DDD(DUK_DDDPRINT("copying property, stridx=%ld -> not found", (long) stridx));
-			duk_pop_known(thr);
+			duk_pop_unsafe(thr);
 		}
 	}
 
@@ -365,7 +371,7 @@ void duk_js_push_closure(duk_hthread *thr,
 
 	formals = duk_hobject_get_formals(thr, (duk_hobject *) fun_temp);
 	if (formals) {
-		len_value = (duk_uint_t) DUK_HARRAY_GET_LENGTH(formals);
+		len_value = (duk_uint_t) formals->length;
 		DUK_DD(DUK_DDPRINT("closure length from _Formals -> %ld", (long) len_value));
 	} else {
 		len_value = fun_temp->nargs;
@@ -404,36 +410,26 @@ void duk_js_push_closure(duk_hthread *thr,
 
 	/*
 	 *  "arguments" and "caller" must be mapped to throwers for strict
-	 *  mode and bound functions in ES5.1 (E5 Section 15.3.5).  This is
-	 *  no longer required in ES2015+ for any functions; instead .arguments
-	 *  and .caller are throwing accessors in Function.prototype for all
-	 *  function types.
+	 *  mode and bound functions (E5 Section 15.3.5).
 	 *
-	 *  V8 provides .caller and .arguments own properties (null) for
-	 *  non-strict functions.  We omit these and rely on the throwing
-	 *  accessors to reduce function size.  Both behaviors are compliant.
+	 *  XXX: This is expensive to have for every strict function instance.
+	 *  Try to implement as virtual properties or on-demand created properties.
 	 */
 
 	/* [ ... closure template ] */
 
+	if (DUK_HOBJECT_HAS_STRICT(&fun_clos->obj)) {
+		duk_xdef_prop_stridx_thrower(thr, -2, DUK_STRIDX_CALLER);
+		duk_xdef_prop_stridx_thrower(thr, -2, DUK_STRIDX_LC_ARGUMENTS);
+	} else {
 #if defined(DUK_USE_NONSTD_FUNC_CALLER_PROPERTY)
-	if (!DUK_HOBJECT_HAS_STRICT(&fun_clos->obj)) {
 		DUK_DDD(DUK_DDDPRINT("function is non-strict and non-standard 'caller' property in use, add initial 'null' value"));
 		duk_push_null(thr);
 		duk_xdef_prop_stridx_short(thr, -3, DUK_STRIDX_CALLER, DUK_PROPDESC_FLAGS_NONE);
-	}
+#else
+		DUK_DDD(DUK_DDDPRINT("function is non-strict and non-standard 'caller' property not used"));
 #endif
-
-#if 0 /* V8 provides immutable null value .caller and .arguments for non-strict functions. */
-	if (DUK_HOBJECT_HAS_STRICT(&fun_clos->obj)) {
-		;
-	} else {
-		duk_push_null(thr);
-		duk_xdef_prop_stridx_short(thr, -3, DUK_STRIDX_CALLER, DUK_PROPDESC_FLAGS_NONE);
-		duk_push_null(thr);
-		duk_xdef_prop_stridx_short(thr, -3, DUK_STRIDX_LC_ARGUMENTS, DUK_PROPDESC_FLAGS_NONE);
 	}
-#endif
 
 	/*
 	 *  "name" used to be non-standard but is now defined by ES2015.
@@ -457,7 +453,7 @@ void duk_js_push_closure(duk_hthread *thr,
 		 * it from Function.prototype.name.
 		 */
 		DUK_DD(DUK_DDPRINT("not setting function instance .name"));
-		duk_pop_known(thr);
+		duk_pop_unsafe(thr);
 	}
 #endif
 
@@ -473,17 +469,17 @@ void duk_js_push_closure(duk_hthread *thr,
 	duk_compact(thr, -2);
 
 	/*
-	 *  Some assertions.
+	 *  Some assertions (E5 Section 13.2).
 	 */
 
-	DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(&fun_clos->obj) == DUK_HTYPE_COMPFUNC);
-	DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, &fun_clos->obj) == thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
+	DUK_ASSERT(DUK_HOBJECT_GET_CLASS_NUMBER(&fun_clos->obj) == DUK_HOBJECT_CLASS_FUNCTION);
+	DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, &fun_clos->obj) == thr->builtins[DUK_BIDX_FUNCTION_PROTOTYPE]);
 	DUK_ASSERT(DUK_HOBJECT_HAS_EXTENSIBLE(&fun_clos->obj));
 	DUK_ASSERT(duk_has_prop_stridx(thr, -2, DUK_STRIDX_LENGTH) != 0);
 	DUK_ASSERT(add_auto_proto == 0 || duk_has_prop_stridx(thr, -2, DUK_STRIDX_PROTOTYPE) != 0);
 	/* May be missing .name */
-	DUK_ASSERT(duk_has_prop_stridx(thr, -2, DUK_STRIDX_CALLER) != 0);
-	DUK_ASSERT(duk_has_prop_stridx(thr, -2, DUK_STRIDX_LC_ARGUMENTS) != 0);
+	DUK_ASSERT(!DUK_HOBJECT_HAS_STRICT(&fun_clos->obj) || duk_has_prop_stridx(thr, -2, DUK_STRIDX_CALLER) != 0);
+	DUK_ASSERT(!DUK_HOBJECT_HAS_STRICT(&fun_clos->obj) || duk_has_prop_stridx(thr, -2, DUK_STRIDX_LC_ARGUMENTS) != 0);
 
 	/*
 	 *  Finish
@@ -495,7 +491,7 @@ void duk_js_push_closure(duk_hthread *thr,
 	                     (duk_tval *) duk_get_tval(thr, -1),
 	                     (duk_tval *) duk_get_tval(thr, -2)));
 
-	duk_pop_known(thr);
+	duk_pop_unsafe(thr);
 
 	/* [ ... closure ] */
 }
@@ -510,7 +506,7 @@ void duk_js_push_closure(duk_hthread *thr,
 DUK_LOCAL void duk__preallocate_env_entries(duk_hthread *thr, duk_hobject *varmap, duk_hobject *env) {
 	duk_uint_fast32_t i;
 
-	for (i = 0; i < (duk_uint_fast32_t) duk_hobject_get_enext(varmap); i++) {
+	for (i = 0; i < (duk_uint_fast32_t) DUK_HOBJECT_GET_ENEXT(varmap); i++) {
 		duk_hstring *key;
 
 		key = DUK_HOBJECT_E_GET_KEY(thr->heap, varmap, i);
@@ -522,18 +518,11 @@ DUK_LOCAL void duk__preallocate_env_entries(duk_hthread *thr, duk_hobject *varma
 		 * are copied to the env object) safe against throwing.
 		 *
 		 * XXX: This could be made much faster by creating the
-		 * property table directly.  Or by having an internal
-		 * duk_prop_setown custom algorithm which just ignores
-		 * inheritance.
+		 * property table directly.
 		 */
 		duk_push_undefined(thr);
 		DUK_DDD(DUK_DDDPRINT("preallocate env entry for key %!O", key));
-		(void) duk_prop_defown_strkey(thr,
-		                              env,
-		                              key,
-		                              duk_get_top_index_known(thr),
-		                              DUK_DEFPROP_ATTR_WE | DUK_DEFPROP_HAVE_VALUE);
-		duk_pop_known(thr);
+		duk_hobject_define_property_internal(thr, env, key, DUK_PROPDESC_FLAGS_WE);
 	}
 }
 
@@ -555,12 +544,12 @@ duk_hobject *duk_create_activation_environment_record(duk_hthread *thr, duk_hobj
 		parent = thr->builtins[DUK_BIDX_GLOBAL_ENV];
 	}
 
-	env = duk_hdecenv_alloc(thr, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_DECENV));
+	env = duk_hdecenv_alloc(thr, DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_DECENV));
 	DUK_ASSERT(env != NULL);
 	duk_push_hobject(thr, (duk_hobject *) env);
 
-	DUK_ASSERT(duk_hobject_get_proto_raw(thr->heap, (duk_hobject *) env) == NULL);
-	duk_hobject_set_proto_raw(thr->heap, (duk_hobject *) env, parent);
+	DUK_ASSERT(DUK_HOBJECT_GET_PROTOTYPE(thr->heap, (duk_hobject *) env) == NULL);
+	DUK_HOBJECT_SET_PROTOTYPE(thr->heap, (duk_hobject *) env, parent);
 	DUK_HOBJECT_INCREF_ALLOWNULL(thr, parent); /* parent env is the prototype */
 
 	/* open scope information, for compiled functions only */
@@ -624,7 +613,7 @@ void duk_js_init_activation_environment_records_delayed(duk_hthread *thr, duk_ac
 		duk_hobject *p = env;
 		while (p) {
 			DUK_DDD(DUK_DDDPRINT("  -> %!ipO", (duk_heaphdr *) p));
-			p = duk_hobject_get_proto_raw(thr->heap, p);
+			p = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, p);
 		}
 	}
 #endif
@@ -634,7 +623,7 @@ void duk_js_init_activation_environment_records_delayed(duk_hthread *thr, duk_ac
 	DUK_HOBJECT_INCREF(thr, env); /* XXX: incref by count (here 2 times) */
 	DUK_HOBJECT_INCREF(thr, env);
 
-	duk_pop_known(thr);
+	duk_pop_unsafe(thr);
 }
 
 /*
@@ -686,7 +675,7 @@ DUK_INTERNAL void duk_js_close_environment_record(duk_hthread *thr, duk_hobject 
 	 *  - having correct value types
 	 */
 
-	DUK_DDD(DUK_DDDPRINT("copying bound register values, %ld bound regs", (long) duk_hobject_get_enext(varmap)));
+	DUK_DDD(DUK_DDDPRINT("copying bound register values, %ld bound regs", (long) DUK_HOBJECT_GET_ENEXT(varmap)));
 
 	/* Copy over current variable values from value stack to the
 	 * environment record.  The scope object is empty but may
@@ -697,7 +686,7 @@ DUK_INTERNAL void duk_js_close_environment_record(duk_hthread *thr, duk_hobject 
 	 * Hash part would need special treatment however (maybe copy, and
 	 * then realloc with hash part if large enough).
 	 */
-	for (i = 0; i < (duk_uint_fast32_t) duk_hobject_get_enext(varmap); i++) {
+	for (i = 0; i < (duk_uint_fast32_t) DUK_HOBJECT_GET_ENEXT(varmap); i++) {
 		duk_size_t regbase_byteoff;
 
 		key = DUK_HOBJECT_E_GET_KEY(thr->heap, varmap, i);
@@ -738,13 +727,7 @@ DUK_INTERNAL void duk_js_close_environment_record(duk_hthread *thr, duk_hobject 
 		                     (duk_heaphdr *) key,
 		                     (long) regnum,
 		                     (duk_tval *) duk_get_tval(thr, -1)));
-
-		(void) duk_prop_defown_strkey(thr,
-		                              env,
-		                              key,
-		                              duk_get_top_index_known(thr),
-		                              DUK_DEFPROP_ATTR_WE | DUK_DEFPROP_HAVE_VALUE);
-		duk_pop_known(thr);
+		duk_hobject_define_property_internal(thr, env, key, DUK_PROPDESC_FLAGS_WE);
 	}
 
 	/* NULL atomically to avoid inconsistent state + side effects. */
@@ -887,7 +870,8 @@ duk_bool_t duk__get_identifier_reference(duk_hthread *thr,
 	DUK_ASSERT(name != NULL);
 	DUK_ASSERT(out != NULL);
 
-	DUK_ASSERT(env == NULL || DUK_HOBJECT_IS_ENV(env));
+	DUK_ASSERT(!env || DUK_HOBJECT_IS_ENV(env));
+	DUK_ASSERT(!env || !DUK_HOBJECT_HAS_ARRAY_PART(env));
 
 	/*
 	 *  Conceptually, we look for the identifier binding by starting from
@@ -973,7 +957,7 @@ duk_bool_t duk__get_identifier_reference(duk_hthread *thr,
 
 	sanity = DUK_HOBJECT_PROTOTYPE_CHAIN_SANITY;
 	while (env != NULL) {
-		duk_small_uint_t htype;
+		duk_small_uint_t cl;
 		duk_uint_t attrs;
 
 		DUK_DDD(DUK_DDDPRINT("duk__get_identifier_reference, name=%!O, considering env=%p -> %!iO",
@@ -983,10 +967,11 @@ duk_bool_t duk__get_identifier_reference(duk_hthread *thr,
 
 		DUK_ASSERT(env != NULL);
 		DUK_ASSERT(DUK_HOBJECT_IS_ENV(env));
+		DUK_ASSERT(!DUK_HOBJECT_HAS_ARRAY_PART(env));
 
-		htype = DUK_HOBJECT_GET_HTYPE(env);
-		DUK_ASSERT(htype == DUK_HTYPE_OBJENV || htype == DUK_HTYPE_DECENV);
-		if (htype == DUK_HTYPE_DECENV) {
+		cl = DUK_HOBJECT_GET_CLASS_NUMBER(env);
+		DUK_ASSERT(cl == DUK_HOBJECT_CLASS_OBJENV || cl == DUK_HOBJECT_CLASS_DECENV);
+		if (cl == DUK_HOBJECT_CLASS_DECENV) {
 			/*
 			 *  Declarative environment record.
 			 *
@@ -1050,22 +1035,21 @@ duk_bool_t duk__get_identifier_reference(duk_hthread *thr,
 			duk_hobject *target;
 			duk_bool_t found;
 
-			DUK_ASSERT(htype == DUK_HTYPE_OBJENV);
+			DUK_ASSERT(cl == DUK_HOBJECT_CLASS_OBJENV);
 			DUK_HOBJENV_ASSERT_VALID((duk_hobjenv *) env);
 
 			target = ((duk_hobjenv *) env)->target;
 			DUK_ASSERT(target != NULL);
 
-			/* Target may be a Proxy (or inherit from one), or
-			 * property may be an accessor, so we must use an
-			 * actual, Proxy-aware hasprop check here.
+			/* Target may be a Proxy or property may be an accessor, so we must
+			 * use an actual, Proxy-aware hasprop check here.
 			 *
-			 * out->holder is NOT set to the actual duk_hobject
-			 * where the property is found, but rather the object
-			 * binding target object.
+			 * out->holder is NOT set to the actual duk_hobject where the
+			 * property is found, but rather the object binding target object.
 			 */
 
-			if (1) {
+#if defined(DUK_USE_ES6_PROXY)
+			if (DUK_UNLIKELY(DUK_HOBJECT_IS_PROXY(target))) {
 				duk_tval tv_name;
 				duk_tval tv_target_tmp;
 
@@ -1073,7 +1057,16 @@ duk_bool_t duk__get_identifier_reference(duk_hthread *thr,
 				DUK_TVAL_SET_STRING(&tv_name, name);
 				DUK_TVAL_SET_OBJECT(&tv_target_tmp, target);
 
-				found = duk_prop_has(thr, &tv_target_tmp, &tv_name);
+				found = duk_hobject_hasprop(thr, &tv_target_tmp, &tv_name);
+			} else
+#endif /* DUK_USE_ES6_PROXY */
+			{
+				/* XXX: duk_hobject_hasprop() would be correct for
+				 * non-Proxy objects too, but it is about ~20-25%
+				 * slower at present so separate code paths for
+				 * Proxy and non-Proxy now.
+				 */
+				found = duk_hobject_hasprop_raw(thr, target, name);
 			}
 
 			if (found) {
@@ -1103,10 +1096,10 @@ duk_bool_t duk__get_identifier_reference(duk_hthread *thr,
 		}
 
 		if (DUK_UNLIKELY(sanity-- == 0)) {
-			DUK_ERROR_RANGE_PROTO_SANITY(thr);
+			DUK_ERROR_RANGE(thr, DUK_STR_PROTOTYPE_CHAIN_LIMIT);
 			DUK_WO_NORETURN(return 0;);
 		}
-		env = duk_hobject_get_proto_raw(thr->heap, env);
+		env = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, env);
 	}
 
 	/*
@@ -1153,6 +1146,7 @@ duk_bool_t duk_js_hasvar_envrec(duk_hthread *thr,
         DUK_ASSERT_REFCOUNT_NONZERO_HEAPHDR(name);
 
 	DUK_ASSERT(DUK_HOBJECT_IS_ENV(env));
+	DUK_ASSERT(!DUK_HOBJECT_HAS_ARRAY_PART(env));
 
 	/* lookup results is ignored */
 	parents = 0;
@@ -1189,6 +1183,8 @@ duk_bool_t duk_js_hasvar_envrec(duk_hthread *thr,
 DUK_LOCAL
 duk_bool_t duk__getvar_helper(duk_hthread *thr, duk_hobject *env, duk_activation *act, duk_hstring *name, duk_bool_t throw_flag) {
 	duk__id_lookup_result ref;
+	duk_tval tv_tmp_obj;
+	duk_tval tv_tmp_key;
 	duk_bool_t parents;
 
 	DUK_DDD(DUK_DDDPRINT("getvar: thr=%p, env=%p, act=%p, name=%!O "
@@ -1214,7 +1210,6 @@ duk_bool_t duk__getvar_helper(duk_hthread *thr, duk_hobject *env, duk_activation
 			duk_push_tval(thr, ref.value);
 			duk_push_undefined(thr);
 		} else {
-			duk_idx_t top_idx;
 			DUK_ASSERT(ref.holder != NULL);
 
 			/* ref.holder is safe across the getprop call (even
@@ -1222,9 +1217,9 @@ duk_bool_t duk__getvar_helper(duk_hthread *thr, duk_hobject *env, duk_activation
 			 * ref.holder is a direct heap pointer.
 			 */
 
-			top_idx = thr->valstack_top - thr->valstack_bottom;
-			duk_push_hobject(thr, ref.holder);
-			(void) duk_prop_getvalue_strkey_outidx(thr, top_idx, name, top_idx);
+			DUK_TVAL_SET_OBJECT(&tv_tmp_obj, ref.holder);
+			DUK_TVAL_SET_STRING(&tv_tmp_key, name);
+			(void) duk_hobject_getprop(thr, &tv_tmp_obj, &tv_tmp_key); /* [value] */
 
 			if (ref.has_this) {
 				duk_push_hobject(thr, ref.holder);
@@ -1241,7 +1236,7 @@ duk_bool_t duk__getvar_helper(duk_hthread *thr, duk_hobject *env, duk_activation
 			DUK_ERROR_FMT1(thr,
 			               DUK_ERR_REFERENCE_ERROR,
 			               "identifier '%s' undefined",
-			               (const char *) duk_hstring_get_data(name));
+			               (const char *) DUK_HSTRING_GET_DATA(name));
 			DUK_WO_NORETURN(return 0;);
 		}
 
@@ -1335,8 +1330,8 @@ void duk__putvar_helper(duk_hthread *thr,
 		if (ref.value && (ref.attrs & DUK_PROPDESC_FLAG_WRITABLE)) {
 			/* Update duk_tval in-place if pointer provided and the
 			 * property is writable.  If the property is not writable
-			 * (immutable binding), use duk_prop_putvalue_inidx()
-			 * which will respect mutability.
+			 * (immutable binding), use duk_hobject_putprop() which
+			 * will respect mutability.
 			 */
 			duk_tval *tv_val;
 
@@ -1348,11 +1343,9 @@ void duk__putvar_helper(duk_hthread *thr,
 		} else {
 			DUK_ASSERT(ref.holder != NULL);
 
-			duk_push_hobject(thr, ref.holder);
-			duk_push_tval_unsafe(thr, &tv_tmp_val);
+			DUK_TVAL_SET_OBJECT(&tv_tmp_obj, ref.holder);
 			DUK_TVAL_SET_STRING(&tv_tmp_key, name);
-			(void) duk_prop_putvalue_inidx(thr, duk_get_top(thr) - 2, &tv_tmp_key, duk_get_top(thr) - 1, strict);
-			duk_pop_2_known(thr);
+			(void) duk_hobject_putprop(thr, &tv_tmp_obj, &tv_tmp_key, &tv_tmp_val, strict);
 
 			/* ref.value invalidated here */
 		}
@@ -1370,17 +1363,15 @@ void duk__putvar_helper(duk_hthread *thr,
 		DUK_ERROR_FMT1(thr,
 		               DUK_ERR_REFERENCE_ERROR,
 		               "identifier '%s' undefined",
-		               (const char *) duk_hstring_get_data(name));
+		               (const char *) DUK_HSTRING_GET_DATA(name));
 		DUK_WO_NORETURN(return;);
 	}
 
 	DUK_DDD(DUK_DDDPRINT("identifier binding not found, not strict => set to global"));
 
-	duk_push_hobject(thr, thr->builtins[DUK_BIDX_GLOBAL]);
-	duk_push_tval_unsafe(thr, &tv_tmp_val);
+	DUK_TVAL_SET_OBJECT(&tv_tmp_obj, thr->builtins[DUK_BIDX_GLOBAL]);
 	DUK_TVAL_SET_STRING(&tv_tmp_key, name);
-	(void) duk_prop_putvalue_inidx(thr, duk_get_top(thr) - 2, &tv_tmp_key, duk_get_top(thr) - 1, 0 /* no throw */);
-	duk_pop_2_known(thr);
+	(void) duk_hobject_putprop(thr, &tv_tmp_obj, &tv_tmp_key, &tv_tmp_val, 0); /* 0 = no throw */
 
 	/* NB: 'val' may be invalidated here because put_value may realloc valstack,
 	 * caller beware.
@@ -1447,7 +1438,7 @@ duk_bool_t duk__delvar_helper(duk_hthread *thr, duk_hobject *env, duk_activation
 		}
 		DUK_ASSERT(ref.holder != NULL);
 
-		return duk_prop_delete_obj_strkey(thr, ref.holder, name, 0 /*delprop_flags*/); /* no throw */
+		return duk_hobject_delprop_raw(thr, ref.holder, name, 0);
 	}
 
 	/*
@@ -1539,6 +1530,7 @@ duk_bool_t duk__declvar_helper(duk_hthread *thr,
 	duk_hobject *holder;
 	duk_bool_t parents;
 	duk__id_lookup_result ref;
+	duk_tval *tv;
 
 	DUK_DDD(DUK_DDDPRINT("declvar: thr=%p, env=%p, name=%!O, val=%!T, prop_flags=0x%08lx, is_func_decl=%ld "
 	                     "(env -> %!iO)",
@@ -1577,9 +1569,9 @@ duk_bool_t duk__declvar_helper(duk_hthread *thr,
 
 	parents = 0; /* just check 'env' */
 	if (duk__get_identifier_reference(thr, env, name, NULL, parents, &ref)) {
-		duk_small_int_t attrs;
-		duk_small_uint_t uattrs;
-		duk_bool_t do_full_write;
+		duk_int_t e_idx;
+		duk_int_t h_idx;
+		duk_small_uint_t flags;
 
 		/*
 		 *  Variable already declared, ignore re-declaration.
@@ -1594,16 +1586,24 @@ duk_bool_t duk__declvar_helper(duk_hthread *thr,
 		}
 
 		/*
-		 *  ES5.1 added special processing for redeclaring globals.
-		 *  ES2015+ changed the processing to ignore global object
-		 *  inherited properties.
+		 *  Special behavior in E5.1.
 		 *
-		 *  Implementation fuses CanDeclareGlobalFunction() and
-		 *  CreateGlobalFunctionBinding() which is not 100% correct,
-		 *  but closer to ES2015+ than ES5.1 now.
+		 *  Note that even though parents == 0, the conflicting property
+		 *  may be an inherited property (currently our global object's
+		 *  prototype is Object.prototype).  Step 5.e first operates on
+		 *  the existing property (which is potentially in an ancestor)
+		 *  and then defines a new property in the global object (and
+		 *  never modifies the ancestor).
+		 *
+		 *  Also note that this logic would become even more complicated
+		 *  if the conflicting property might be a virtual one.  Object
+		 *  prototype has no virtual properties, though.
+		 *
+		 *  XXX: this is now very awkward, rework.
 		 */
 
-		DUK_DDD(DUK_DDDPRINT("re-declare a function binding in global object"));
+		DUK_DDD(DUK_DDDPRINT("re-declare a function binding in global object, "
+		                     "updated E5.1 processing"));
 
 		DUK_ASSERT(ref.holder != NULL);
 		holder = ref.holder;
@@ -1611,38 +1611,96 @@ duk_bool_t duk__declvar_helper(duk_hthread *thr,
 		/* holder will be set to the target object, not the actual object
 		 * where the property was found (see duk__get_identifier_reference()).
 		 */
-		DUK_ASSERT(DUK_HOBJECT_GET_HTYPE(holder) == DUK_HTYPE_GLOBAL);
-		DUK_ASSERT(!DUK_HOBJECT_HAS_EXOTIC_ARRAY(holder));
+		DUK_ASSERT(DUK_HOBJECT_GET_CLASS_NUMBER(holder) == DUK_HOBJECT_CLASS_GLOBAL);
+		DUK_ASSERT(!DUK_HOBJECT_HAS_EXOTIC_ARRAY(holder)); /* global object doesn't have array part */
 
-		attrs = duk_prop_getownattr_obj_strkey(thr, holder, name);
-		if (attrs >= 0) {
-			uattrs = (duk_small_uint_t) attrs;
-			if (uattrs & DUK_PROPDESC_FLAG_CONFIGURABLE) {
-				do_full_write = 1;
-			} else {
-				if (uattrs & DUK_PROPDESC_FLAG_ACCESSOR) {
-					goto fail_existing_attributes;
-				}
-				if (!((uattrs & DUK_PROPDESC_FLAG_WRITABLE) && (uattrs & DUK_PROPDESC_FLAG_ENUMERABLE))) {
-					goto fail_existing_attributes;
-				}
-				do_full_write = 0;
+		/* XXX: use a helper for prototype traversal; no loop check here */
+		/* must be found: was found earlier, and cannot be inherited */
+		for (;;) {
+			DUK_ASSERT(holder != NULL);
+			if (duk_hobject_find_entry(thr->heap, holder, name, &e_idx, &h_idx)) {
+				DUK_ASSERT(e_idx >= 0);
+				break;
 			}
-		} else {
-			if (duk_js_isextensible(thr, holder)) {
-				do_full_write = 1;
-			} else {
-				goto fail_not_extensible;
+			/* SCANBUILD: NULL pointer dereference, doesn't actually trigger,
+			 * asserted above.
+			 */
+			holder = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, holder);
+		}
+		DUK_ASSERT(holder != NULL);
+		DUK_ASSERT(e_idx >= 0);
+		/* SCANBUILD: scan-build produces a NULL pointer dereference warning
+		 * below; it never actually triggers because holder is actually never
+		 * NULL.
+		 */
+
+		/* ref.holder is global object, holder is the object with the
+		 * conflicting property.
+		 */
+
+		flags = DUK_HOBJECT_E_GET_FLAGS(thr->heap, holder, e_idx);
+		if (!(flags & DUK_PROPDESC_FLAG_CONFIGURABLE)) {
+			if (flags & DUK_PROPDESC_FLAG_ACCESSOR) {
+				DUK_DDD(DUK_DDDPRINT("existing property is a non-configurable "
+				                     "accessor -> reject"));
+				goto fail_existing_attributes;
 			}
+			if (!((flags & DUK_PROPDESC_FLAG_WRITABLE) && (flags & DUK_PROPDESC_FLAG_ENUMERABLE))) {
+				DUK_DDD(DUK_DDDPRINT("existing property is a non-configurable "
+				                     "plain property which is not writable and "
+				                     "enumerable -> reject"));
+				goto fail_existing_attributes;
+			}
+
+			DUK_DDD(DUK_DDDPRINT("existing property is not configurable but "
+			                     "is plain, enumerable, and writable -> "
+			                     "allow redeclaration"));
 		}
 
-		duk_push_tval(thr, val);
-		(void) duk_prop_defown_strkey(thr,
-		                              ref.holder,
-		                              name,
-		                              duk_get_top_index_known(thr),
-		                              prop_flags | (do_full_write ? DUK_DEFPROP_HAVE_WEC : 0) | DUK_DEFPROP_HAVE_VALUE);
-		duk_pop_known(thr);
+		if (holder == ref.holder) {
+			/* XXX: if duk_hobject_define_property_internal() was updated
+			 * to handle a pre-existing accessor property, this would be
+			 * a simple call (like for the ancestor case).
+			 */
+			DUK_DDD(DUK_DDDPRINT("redefine, offending property in global object itself"));
+
+			if (flags & DUK_PROPDESC_FLAG_ACCESSOR) {
+				duk_hobject *tmp;
+
+				tmp = DUK_HOBJECT_E_GET_VALUE_GETTER(thr->heap, holder, e_idx);
+				DUK_HOBJECT_E_SET_VALUE_GETTER(thr->heap, holder, e_idx, NULL);
+				DUK_HOBJECT_DECREF_ALLOWNULL(thr, tmp);
+				DUK_UNREF(tmp);
+				tmp = DUK_HOBJECT_E_GET_VALUE_SETTER(thr->heap, holder, e_idx);
+				DUK_HOBJECT_E_SET_VALUE_SETTER(thr->heap, holder, e_idx, NULL);
+				DUK_HOBJECT_DECREF_ALLOWNULL(thr, tmp);
+				DUK_UNREF(tmp);
+			} else {
+				tv = DUK_HOBJECT_E_GET_VALUE_TVAL_PTR(thr->heap, holder, e_idx);
+				DUK_TVAL_SET_UNDEFINED_UPDREF(thr, tv);
+			}
+
+			/* Here val would be potentially invalid if we didn't make
+			 * a value copy at the caller.
+			 */
+
+			tv = DUK_HOBJECT_E_GET_VALUE_TVAL_PTR(thr->heap, holder, e_idx);
+			DUK_TVAL_SET_TVAL(tv, val);
+			DUK_TVAL_INCREF(thr, tv);
+			DUK_HOBJECT_E_SET_FLAGS(thr->heap, holder, e_idx, prop_flags);
+
+			DUK_DDD(DUK_DDDPRINT("updated global binding, final result: "
+			                     "value -> %!T, prop_flags=0x%08lx",
+			                     (duk_tval *) DUK_HOBJECT_E_GET_VALUE_TVAL_PTR(thr->heap, holder, e_idx),
+			                     (unsigned long) prop_flags));
+		} else {
+			DUK_DDD(DUK_DDDPRINT("redefine, offending property in ancestor"));
+
+			DUK_ASSERT(ref.holder == thr->builtins[DUK_BIDX_GLOBAL]);
+			duk_push_tval(thr, val);
+			duk_hobject_define_property_internal(thr, ref.holder, name, prop_flags);
+		}
+
 		return 0;
 	}
 
@@ -1683,11 +1741,10 @@ duk_bool_t duk__declvar_helper(duk_hthread *thr,
 	duk_push_hstring(thr, name);
 	duk_push_tval(thr, val);
 	duk_xdef_prop(thr, -3, prop_flags); /* [holder name val] -> [holder] */
-	duk_pop_known(thr);
+	duk_pop_unsafe(thr);
 
 	return 0;
 
-fail_internal_error:
 fail_existing_attributes:
 fail_not_extensible:
 	DUK_ERROR_TYPE(thr, "declaration failed");

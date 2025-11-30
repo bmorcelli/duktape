@@ -70,7 +70,7 @@ DUK_INTERNAL duk_bool_t duk_js_toboolean(duk_tval *tv) {
 		 */
 		duk_hstring *h = DUK_TVAL_GET_STRING(tv);
 		DUK_ASSERT(h != NULL);
-		return (duk_hstring_get_bytelen(h) > 0 ? 1 : 0);
+		return (DUK_HSTRING_GET_BYTELEN(h) > 0 ? 1 : 0);
 	}
 	case DUK_TAG_OBJECT: {
 		return 1;
@@ -170,7 +170,7 @@ DUK_LOCAL duk_double_t duk__tonumber_string_raw(duk_hthread *thr) {
 
 #if defined(DUK_USE_PREFER_SIZE)
 	d = duk_get_number(thr, -1);
-	duk_pop_known(thr);
+	duk_pop_unsafe(thr);
 #else
 	thr->valstack_top--;
 	DUK_ASSERT(DUK_TVAL_IS_NUMBER(thr->valstack_top));
@@ -227,7 +227,7 @@ DUK_INTERNAL duk_double_t duk_js_tonumber(duk_hthread *thr, duk_tval *tv) {
 		DUK_ASSERT(duk_get_tval(thr, -1) != NULL);
 		d = duk_js_tonumber(thr, duk_get_tval(thr, -1));
 
-		duk_pop_known(thr);
+		duk_pop_unsafe(thr);
 		return d;
 	}
 	case DUK_TAG_POINTER: {
@@ -690,7 +690,7 @@ recursive_call:
 	{
 		duk_bool_t rc;
 		rc = duk_js_equals_helper(thr, DUK_GET_TVAL_NEGIDX(thr, -2), DUK_GET_TVAL_NEGIDX(thr, -1), 0 /*flags:nonstrict*/);
-		duk_pop_2_known(thr);
+		duk_pop_2_unsafe(thr);
 		return rc;
 	}
 }
@@ -754,10 +754,10 @@ DUK_INTERNAL duk_small_int_t duk_js_string_compare(duk_hstring *h1, duk_hstring 
 	DUK_ASSERT(h1 != NULL);
 	DUK_ASSERT(h2 != NULL);
 
-	return duk_js_data_compare((const duk_uint8_t *) duk_hstring_get_data(h1),
-	                           (const duk_uint8_t *) duk_hstring_get_data(h2),
-	                           (duk_size_t) duk_hstring_get_bytelen(h1),
-	                           (duk_size_t) duk_hstring_get_bytelen(h2));
+	return duk_js_data_compare((const duk_uint8_t *) DUK_HSTRING_GET_DATA(h1),
+	                           (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h2),
+	                           (duk_size_t) DUK_HSTRING_GET_BYTELEN(h1),
+	                           (duk_size_t) DUK_HSTRING_GET_BYTELEN(h2));
 }
 
 #if 0 /* unused */
@@ -931,7 +931,7 @@ DUK_INTERNAL duk_bool_t duk_js_compare_helper(duk_hthread *thr, duk_tval *tv_x, 
 
 		if (DUK_LIKELY(!DUK_HSTRING_HAS_SYMBOL(h1) && !DUK_HSTRING_HAS_SYMBOL(h2))) {
 			rc = duk_js_string_compare(h1, h2);
-			duk_pop_2_known(thr);
+			duk_pop_2_unsafe(thr);
 			if (rc < 0) {
 				return retval ^ 1;
 			} else {
@@ -957,11 +957,11 @@ DUK_INTERNAL duk_bool_t duk_js_compare_helper(duk_hthread *thr, duk_tval *tv_x, 
 	d1 = duk_to_number_m2(thr);
 	d2 = duk_to_number_m1(thr);
 
-	/* We want to duk_pop_2_known(thr); because the values are numbers
+	/* We want to duk_pop_2_unsafe(thr); because the values are numbers
 	 * no decref check is needed.
 	 */
 #if defined(DUK_USE_PREFER_SIZE)
-	duk_pop_2_nodecref_known(thr);
+	duk_pop_2_nodecref_unsafe(thr);
 #else
 	DUK_ASSERT(!DUK_TVAL_NEEDS_REFCOUNT_UPDATE(duk_get_tval(thr, -2)));
 	DUK_ASSERT(!DUK_TVAL_NEEDS_REFCOUNT_UPDATE(duk_get_tval(thr, -1)));
@@ -1144,9 +1144,7 @@ DUK_LOCAL duk_bool_t duk__js_instanceof_helper(duk_hthread *thr, duk_tval *tv_x,
 
 		DUK_ASSERT(val != NULL);
 #if defined(DUK_USE_ES6_PROXY)
-		/* Here we must throw for revoked proxy. */
-		val = duk_hobject_resolve_proxy_target_autothrow(thr, val);
-		DUK_ASSERT(val != NULL);
+		val = duk_hobject_resolve_proxy_target(val);
 #endif
 
 		if (skip_first) {
@@ -1156,23 +1154,23 @@ DUK_LOCAL duk_bool_t duk__js_instanceof_helper(duk_hthread *thr, duk_tval *tv_x,
 		}
 
 		DUK_ASSERT(val != NULL);
-		val = duk_hobject_get_proto_raw(thr->heap, val);
+		val = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, val);
 	} while (--sanity > 0);
 
 	DUK_ASSERT(sanity == 0);
-	DUK_ERROR_RANGE_PROTO_SANITY(thr);
+	DUK_ERROR_RANGE(thr, DUK_STR_PROTOTYPE_CHAIN_LIMIT);
 	DUK_WO_NORETURN(return 0;);
 
 pop2_and_false:
-	duk_pop_2_known(thr);
+	duk_pop_2_unsafe(thr);
 	return 0;
 
 pop3_and_false:
-	duk_pop_3_known(thr);
+	duk_pop_3_unsafe(thr);
 	return 0;
 
 pop3_and_true:
-	duk_pop_3_known(thr);
+	duk_pop_3_unsafe(thr);
 	return 1;
 
 error_invalid_rval:
@@ -1209,7 +1207,32 @@ DUK_INTERNAL duk_bool_t duk_js_instanceof(duk_hthread *thr, duk_tval *tv_x, duk_
 DUK_INTERNAL duk_bool_t duk_js_in(duk_hthread *thr, duk_tval *tv_x, duk_tval *tv_y) {
 	duk_bool_t retval;
 
-	retval = duk_prop_has(thr, tv_y /*tv_obj*/, tv_x /*tv_key*/);
+	/*
+	 *  Get the values onto the stack first.  It would be possible to cover
+	 *  some normal cases without resorting to the value stack (e.g. if
+	 *  lval is already a string).
+	 */
+
+	/* XXX: The ES5/5.1/6 specifications require that the key in 'key in obj'
+	 * must be string coerced before the internal HasProperty() algorithm is
+	 * invoked.  A fast path skipping coercion could be safely implemented for
+	 * numbers (as number-to-string coercion has no side effects).  For ES2015
+	 * proxy behavior, the trap 'key' argument must be in a string coerced
+	 * form (which is a shame).
+	 */
+
+	/* TypeError if rval is not an object or object like (e.g. lightfunc
+	 * or plain buffer).
+	 */
+	duk_push_tval(thr, tv_x);
+	duk_push_tval(thr, tv_y);
+	duk_require_type_mask(thr, -1, DUK_TYPE_MASK_OBJECT | DUK_TYPE_MASK_LIGHTFUNC | DUK_TYPE_MASK_BUFFER);
+
+	(void) duk_to_property_key_hstring(thr, -2);
+
+	retval = duk_hobject_hasprop(thr, DUK_GET_TVAL_NEGIDX(thr, -1), DUK_GET_TVAL_NEGIDX(thr, -2));
+
+	duk_pop_2_unsafe(thr);
 	return retval;
 }
 
@@ -1304,23 +1327,18 @@ DUK_INTERNAL duk_small_uint_t duk_js_typeof_stridx(duk_tval *tv_x) {
  *  IsArray()
  */
 
-DUK_INTERNAL duk_bool_t duk_js_isarray_hobject(duk_hthread *thr, duk_hobject *h) {
+DUK_INTERNAL duk_bool_t duk_js_isarray_hobject(duk_hobject *h) {
 	DUK_ASSERT(h != NULL);
-
 #if defined(DUK_USE_ES6_PROXY)
-	/* Here we must throw for revoked proxy. */
-	h = duk_hobject_resolve_proxy_target_autothrow(thr, h);
-	DUK_ASSERT(h != NULL);
-#else
-	DUK_UNREF(thr);
+	h = duk_hobject_resolve_proxy_target(h);
 #endif
-	return (DUK_HEAPHDR_IS_ARRAY((duk_heaphdr *) h) ? 1 : 0);
+	return (DUK_HOBJECT_GET_CLASS_NUMBER(h) == DUK_HOBJECT_CLASS_ARRAY ? 1 : 0);
 }
 
-DUK_INTERNAL duk_bool_t duk_js_isarray(duk_hthread *thr, duk_tval *tv) {
+DUK_INTERNAL duk_bool_t duk_js_isarray(duk_tval *tv) {
 	DUK_ASSERT(tv != NULL);
 	if (DUK_TVAL_IS_OBJECT(tv)) {
-		return duk_js_isarray_hobject(thr, DUK_TVAL_GET_OBJECT(tv));
+		return duk_js_isarray_hobject(DUK_TVAL_GET_OBJECT(tv));
 	}
 	return 0;
 }
@@ -1398,7 +1416,7 @@ DUK_INTERNAL duk_uarridx_t duk_js_to_arrayindex_string(const duk_uint8_t *str, d
 	return res;
 
 parse_fail:
-	return DUK_ARRIDX_NONE;
+	return DUK_HSTRING_NO_ARRAY_INDEX;
 }
 
 #if !defined(DUK_USE_HSTRING_ARRIDX)
@@ -1414,7 +1432,7 @@ DUK_INTERNAL duk_uarridx_t duk_js_to_arrayindex_hstring_fast_known(duk_hstring *
 	DUK_ASSERT(h != NULL);
 	DUK_ASSERT(DUK_HSTRING_HAS_ARRIDX(h));
 
-	p = duk_hstring_get_data(h);
+	p = DUK_HSTRING_GET_DATA(h);
 	res = 0;
 	for (;;) {
 		t = *p++;
@@ -1431,7 +1449,7 @@ DUK_INTERNAL duk_uarridx_t duk_js_to_arrayindex_hstring_fast_known(duk_hstring *
 DUK_INTERNAL duk_uarridx_t duk_js_to_arrayindex_hstring_fast(duk_hstring *h) {
 	DUK_ASSERT(h != NULL);
 	if (!DUK_HSTRING_HAS_ARRIDX(h)) {
-		return DUK_ARRIDX_NONE;
+		return DUK_HSTRING_NO_ARRAY_INDEX;
 	}
 	return duk_js_to_arrayindex_hstring_fast_known(h);
 }

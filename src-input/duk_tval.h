@@ -91,13 +91,6 @@ typedef struct {
 		duk__tv->ui[DUK_DBL_IDX_UI1] = (duk_uint32_t) (h); \
 	} while (0)
 #endif /* DUK_USE_64BIT_OPS */
-#define DUK__TVAL_UPDATE_TAGGEDPOINTER(tv, h, tag) \
-	do { \
-		duk_tval *duk__tv; \
-		duk__tv = (tv); \
-		DUK_ASSERT(duk__tv->ui[DUK_DBL_IDX_UI0] == ((duk_uint32_t) (tag)) << 16); \
-		duk__tv->ui[DUK_DBL_IDX_UI1] = (duk_uint32_t) (h); \
-	} while (0)
 
 #if defined(DUK_USE_64BIT_OPS)
 /* Double casting for pointer to avoid gcc warning (cast from pointer to integer of different size) */
@@ -254,7 +247,6 @@ typedef struct {
 #define DUK_TVAL_SET_LIGHTFUNC(tv, fp, flags) DUK__TVAL_SET_LIGHTFUNC((tv), (fp), (flags))
 #define DUK_TVAL_SET_STRING(tv, h)            DUK__TVAL_SET_TAGGEDPOINTER((tv), (h), DUK_TAG_STRING)
 #define DUK_TVAL_SET_OBJECT(tv, h)            DUK__TVAL_SET_TAGGEDPOINTER((tv), (h), DUK_TAG_OBJECT)
-#define DUK_TVAL_UPDATE_OBJECT(tv, h)         DUK__TVAL_UPDATE_TAGGEDPOINTER((tv), (h), DUK_TAG_OBJECT)
 #define DUK_TVAL_SET_BUFFER(tv, h)            DUK__TVAL_SET_TAGGEDPOINTER((tv), (h), DUK_TAG_BUFFER)
 #define DUK_TVAL_SET_POINTER(tv, p)           DUK__TVAL_SET_TAGGEDPOINTER((tv), (p), DUK_TAG_POINTER)
 
@@ -340,7 +332,6 @@ struct duk_tval_struct {
 	duk_small_uint_t t;
 	duk_small_uint_t v_extra;
 	union {
-		duk_uint8_t bytes[8];
 		duk_double_t d;
 		duk_small_int_t i;
 #if defined(DUK_USE_FASTINT)
@@ -541,14 +532,6 @@ typedef struct {
 		duk__tv->v.hobject = (hptr); \
 	} while (0)
 
-#define DUK_TVAL_UPDATE_OBJECT(tv, hptr) \
-	do { \
-		duk_tval *duk__tv; \
-		duk__tv = (tv); \
-		DUK_ASSERT(duk__tv->t == DUK_TAG_OBJECT); \
-		duk__tv->v.hobject = (hptr); \
-	} while (0)
-
 #define DUK_TVAL_SET_BUFFER(tv, hptr) \
 	do { \
 		duk_tval *duk__tv; \
@@ -607,7 +590,6 @@ typedef struct {
 #define DUK_TVAL_IS_UNDEFINED(tv)          ((tv)->t == DUK_TAG_UNDEFINED)
 #define DUK_TVAL_IS_UNUSED(tv)             ((tv)->t == DUK_TAG_UNUSED)
 #define DUK_TVAL_IS_NULL(tv)               ((tv)->t == DUK_TAG_NULL)
-#define DUK_TVAL_IS_NULLISH(tv)            (((tv)->t & (duk_small_uint_t) (~0x01U)) == DUK_TAG_UNDEFINED)
 #define DUK_TVAL_IS_BOOLEAN(tv)            ((tv)->t == DUK_TAG_BOOLEAN)
 #define DUK_TVAL_IS_BOOLEAN_TRUE(tv)       (((tv)->t == DUK_TAG_BOOLEAN) && ((tv)->v.i != 0))
 #define DUK_TVAL_IS_BOOLEAN_FALSE(tv)      (((tv)->t == DUK_TAG_BOOLEAN) && ((tv)->v.i == 0))
@@ -652,11 +634,6 @@ DUK_INTERNAL_DECL duk_double_t duk_tval_get_number_unpacked_fastint(duk_tval *tv
 #define DUK_TVAL_SET_BOOLEAN_FALSE(tv) DUK_TVAL_SET_BOOLEAN((tv), 0)
 
 #define DUK_TVAL_STRING_IS_SYMBOL(tv) DUK_HSTRING_HAS_SYMBOL(DUK_TVAL_GET_STRING((tv)))
-
-#if !defined(DUK_TVAL_IS_NULLISH)
-/* If no optimized macro exists, fallback to this. */
-#define DUK_TVAL_IS_NULLISH(tv) (DUK_TVAL_IS_NULL((tv)) || DUK_TVAL_IS_UNDEFINED((tv)))
-#endif
 
 /* Lightfunc flags packing and unpacking. */
 /* Sign extend: 0x0000##00 -> 0x##000000 -> sign extend to 0xssssss##.

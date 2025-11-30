@@ -959,7 +959,7 @@ DUK_LOCAL duk_double_t duk__push_this_get_timeval_tzoffset(duk_hthread *thr, duk
 
 	duk_push_this(thr);
 	h = duk_get_hobject(thr, -1); /* XXX: getter with class check, useful in built-ins */
-	if (h == NULL || DUK_HOBJECT_GET_HTYPE(h) != DUK_HTYPE_DATE) {
+	if (h == NULL || DUK_HOBJECT_GET_CLASS_NUMBER(h) != DUK_HOBJECT_CLASS_DATE) {
 		DUK_ERROR_TYPE(thr, "expected Date");
 		DUK_WO_NORETURN(return 0.0;);
 	}
@@ -1010,7 +1010,7 @@ DUK_LOCAL duk_ret_t duk__set_this_timeval_from_dparts(duk_hthread *thr, duk_doub
 
 	d = duk_bi_date_get_timeval_from_dparts(dparts, flags);
 	duk_push_number(thr, d); /* -> [ ... this timeval_new ] */
-	duk_dup_top_unsafe(thr); /* -> [ ... this timeval_new timeval_new ] */
+	duk_dup_top(thr); /* -> [ ... this timeval_new timeval_new ] */
 
 	/* Must force write because e.g. .setYear() must work even when
 	 * the Date instance is frozen.
@@ -1374,7 +1374,7 @@ DUK_LOCAL void duk__set_parts_from_args(duk_hthread *thr, duk_double_t *dparts, 
  *  magic value is set to an index pointing to the array of control flags
  *  below.
  *
- *  This must be kept in strict sync with configure tooling!
+ *  This must be kept in strict sync with genbuiltins.py!
  */
 
 static duk_uint16_t duk__date_magics[] = {
@@ -1520,7 +1520,7 @@ DUK_INTERNAL duk_ret_t duk_bi_date_constructor(duk_hthread *thr) {
 
 	(void) duk_push_object_helper(thr,
 	                              DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS |
-	                                  DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_DATE),
+	                                  DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_DATE),
 	                              DUK_BIDX_DATE_PROTOTYPE);
 
 	/* Unlike most built-ins, the internal [[PrimitiveValue]] of a Date
@@ -1649,7 +1649,7 @@ DUK_INTERNAL duk_ret_t duk_bi_date_prototype_to_json(duk_hthread *thr) {
 	duk_push_this(thr);
 	duk_to_object(thr, -1);
 
-	duk_dup_top_unsafe(thr);
+	duk_dup_top(thr);
 	duk_to_primitive(thr, -1, DUK_HINT_NUMBER);
 	if (duk_is_number(thr, -1)) {
 		duk_double_t d = duk_get_number(thr, -1);
@@ -1803,7 +1803,7 @@ DUK_INTERNAL duk_ret_t duk_bi_date_prototype_set_time(duk_hthread *thr) {
 	(void) duk__push_this_get_timeval(thr, 0 /*flags*/); /* -> [ timeval this ] */
 	d = duk__timeclip(duk_to_number(thr, 0));
 	duk_push_number(thr, d);
-	duk_dup_top_unsafe(thr);
+	duk_dup_top(thr);
 	/* Must force write because .setTime() must work even when
 	 * the Date instance is frozen.
 	 */
@@ -1819,7 +1819,8 @@ DUK_INTERNAL duk_ret_t duk_bi_date_prototype_set_time(duk_hthread *thr) {
 
 #if defined(DUK_USE_SYMBOL_BUILTIN)
 DUK_INTERNAL duk_ret_t duk_bi_date_prototype_toprimitive(duk_hthread *thr) {
-	duk_hstring *h_hintstr;
+	duk_size_t hintlen;
+	const char *hintstr;
 	duk_int_t hint;
 
 	/* Invokes OrdinaryToPrimitive() with suitable hint.  Note that the
@@ -1832,10 +1833,10 @@ DUK_INTERNAL duk_ret_t duk_bi_date_prototype_toprimitive(duk_hthread *thr) {
 	duk_require_object(thr, -1);
 	DUK_ASSERT_TOP(thr, 2);
 
-	h_hintstr = duk_require_hstring(thr, 0);
-	if (duk_hstring_equals_ascii_cstring(h_hintstr, "string") || duk_hstring_equals_ascii_cstring(h_hintstr, "default")) {
+	hintstr = duk_require_lstring(thr, 0, &hintlen);
+	if ((hintlen == 6 && DUK_STRCMP(hintstr, "string") == 0) || (hintlen == 7 && DUK_STRCMP(hintstr, "default") == 0)) {
 		hint = DUK_HINT_STRING;
-	} else if (duk_hstring_equals_ascii_cstring(h_hintstr, "number")) {
+	} else if (hintlen == 6 && DUK_STRCMP(hintstr, "number") == 0) {
 		hint = DUK_HINT_NUMBER;
 	} else {
 		DUK_DCERROR_TYPE_INVALID_ARGS(thr);

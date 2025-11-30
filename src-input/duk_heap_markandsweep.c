@@ -30,11 +30,11 @@ DUK_LOCAL void duk__mark_hobject(duk_heap *heap, duk_hobject *h) {
 	DUK_DDD(DUK_DDDPRINT("duk__mark_hobject: %p", (void *) h));
 
 	DUK_ASSERT(h);
-	DUK_HOBJECT_ASSERT_VALID(heap, h);
+	DUK_HOBJECT_ASSERT_VALID(h);
 
 	/* XXX: use advancing pointers instead of index macros -> faster and smaller? */
 
-	for (i = 0; i < (duk_uint_fast32_t) duk_hobject_get_enext(h); i++) {
+	for (i = 0; i < (duk_uint_fast32_t) DUK_HOBJECT_GET_ENEXT(h); i++) {
 		duk_hstring *key = DUK_HOBJECT_E_GET_KEY(heap, h, i);
 		if (key == NULL) {
 			continue;
@@ -48,32 +48,13 @@ DUK_LOCAL void duk__mark_hobject(duk_heap *heap, duk_hobject *h) {
 		}
 	}
 
-	{
-		duk_propvalue *val_base;
-		duk_uarridx_t *key_base;
-		duk_uint8_t *attr_base;
-
-		duk_hobject_get_idxprops_key_attr(heap, h, &val_base, &key_base, &attr_base);
-
-		for (i = 0; i < (duk_uint_fast32_t) h->i_next; i++) {
-			duk_propvalue *pv = val_base + i;
-			duk_uint8_t attrs;
-			if (key_base[i] == DUK_ARRIDX_NONE) {
-				continue;
-			}
-			attrs = attr_base[i];
-			if (attrs & DUK_PROPDESC_FLAG_ACCESSOR) {
-				duk__mark_heaphdr(heap, (duk_heaphdr *) pv->a.get);
-				duk__mark_heaphdr(heap, (duk_heaphdr *) pv->a.set);
-			} else {
-				duk__mark_tval(heap, &pv->v);
-			}
-		}
+	for (i = 0; i < (duk_uint_fast32_t) DUK_HOBJECT_GET_ASIZE(h); i++) {
+		duk__mark_tval(heap, DUK_HOBJECT_A_GET_VALUE_PTR(heap, h, i));
 	}
 
 	/* Hash part is a 'weak reference' and does not contribute. */
 
-	duk__mark_heaphdr(heap, (duk_heaphdr *) duk_hobject_get_proto_raw(heap, h));
+	duk__mark_heaphdr(heap, (duk_heaphdr *) DUK_HOBJECT_GET_PROTOTYPE(heap, h));
 
 	/* Fast path for objects which don't have a subclass struct, or have a
 	 * subclass struct but nothing that needs marking in the subclass struct.
@@ -84,22 +65,8 @@ DUK_LOCAL void duk__mark_hobject(duk_heap *heap, duk_hobject *h) {
 	}
 	DUK_ASSERT(DUK_HOBJECT_PROHIBITS_FASTREFS(h));
 
-	/* XXX: reorg, more common first; htype dispatch? */
-	if (DUK_HOBJECT_IS_ARRAY(h) || DUK_HOBJECT_IS_ARGUMENTS(h)) {
-		duk_harray *a = (duk_harray *) h;
-		duk_tval *items;
-		duk_tval *tv;
-		duk_tval *tv_end;
-
-		DUK_HARRAY_ASSERT_VALID(heap, a);
-
-		items = DUK_HARRAY_GET_ITEMS(heap, a);
-		tv = items;
-		tv_end = tv + duk_harray_get_active_items_length(a);
-		while (tv < tv_end) {
-			duk__mark_tval(heap, tv++);
-		}
-	} else if (DUK_HOBJECT_IS_COMPFUNC(h)) {
+	/* XXX: reorg, more common first */
+	if (DUK_HOBJECT_IS_COMPFUNC(h)) {
 		duk_hcompfunc *f = (duk_hcompfunc *) h;
 		duk_tval *tv, *tv_end;
 		duk_hobject **fn, **fn_end;
@@ -178,6 +145,9 @@ DUK_LOCAL void duk__mark_hobject(duk_heap *heap, duk_hobject *h) {
 			duk__mark_heaphdr(heap, (duk_heaphdr *) DUK_ACT_GET_FUNC(act));
 			duk__mark_heaphdr(heap, (duk_heaphdr *) act->var_env);
 			duk__mark_heaphdr(heap, (duk_heaphdr *) act->lex_env);
+#if defined(DUK_USE_NONSTD_FUNC_CALLER_PROPERTY)
+			duk__mark_heaphdr(heap, (duk_heaphdr *) act->prev_caller);
+#endif
 #if 0 /* nothing now */
 			for (cat = act->cat; cat != NULL; cat = cat->parent) {
 			}
@@ -202,7 +172,7 @@ DUK_LOCAL void duk__mark_hobject(duk_heap *heap, duk_hobject *h) {
 /* Mark any duk_heaphdr type.  Recursion tracking happens only here. */
 DUK_LOCAL void duk__mark_heaphdr(duk_heap *heap, duk_heaphdr *h) {
 	DUK_DDD(
-	    DUK_DDDPRINT("duk__mark_heaphdr %p, type %ld", (void *) h, (h != NULL ? (long) DUK_HEAPHDR_GET_HTYPE(h) : (long) -1)));
+	    DUK_DDDPRINT("duk__mark_heaphdr %p, type %ld", (void *) h, (h != NULL ? (long) DUK_HEAPHDR_GET_TYPE(h) : (long) -1)));
 
 	/* XXX: add non-null variant? */
 	if (h == NULL) {
@@ -240,20 +210,19 @@ DUK_LOCAL void duk__mark_heaphdr(duk_heap *heap, duk_heaphdr *h) {
 	heap->ms_recursion_depth++;
 	DUK_ASSERT(heap->ms_recursion_depth != 0); /* Wrap. */
 
-	switch (DUK_HEAPHDR_GET_HTYPE(h)) {
-	case DUK_HTYPE_STRING_INTERNAL:
-	case DUK_HTYPE_STRING_EXTERNAL:
+	switch (DUK_HEAPHDR_GET_TYPE(h)) {
+	case DUK_HTYPE_STRING:
 		duk__mark_hstring(heap, (duk_hstring *) h);
 		break;
-	case DUK_HTYPE_BUFFER_FIXED:
-	case DUK_HTYPE_BUFFER_DYNAMIC:
-	case DUK_HTYPE_BUFFER_EXTERNAL:
+	case DUK_HTYPE_OBJECT:
+		duk__mark_hobject(heap, (duk_hobject *) h);
+		break;
+	case DUK_HTYPE_BUFFER:
 		/* nothing to mark */
 		break;
 	default:
-		DUK_ASSERT(DUK_HEAPHDR_IS_ANY_OBJECT(h));
-		duk__mark_hobject(heap, (duk_hobject *) h);
-		break;
+		DUK_D(DUK_DPRINT("attempt to mark heaphdr %p with invalid htype %ld", (void *) h, (long) DUK_HEAPHDR_GET_TYPE(h)));
+		DUK_UNREACHABLE();
 	}
 
 	DUK_ASSERT(heap->ms_recursion_depth > 0);
@@ -354,8 +323,8 @@ DUK_LOCAL void duk__mark_finalizable(duk_heap *heap) {
 		 * of a _Finalizer hidden symbol.
 		 */
 
-		if (!DUK_HEAPHDR_HAS_REACHABLE(hdr) && DUK_HEAPHDR_IS_ANY_OBJECT(hdr) && !DUK_HEAPHDR_HAS_FINALIZED(hdr) &&
-		    duk_hobject_has_finalizer_fast_raw(heap, (duk_hobject *) hdr)) {
+		if (!DUK_HEAPHDR_HAS_REACHABLE(hdr) && DUK_HEAPHDR_IS_OBJECT(hdr) && !DUK_HEAPHDR_HAS_FINALIZED(hdr) &&
+		    DUK_HOBJECT_HAS_FINALIZER_FAST(heap, (duk_hobject *) hdr)) {
 			/* heaphdr:
 			 *  - is not reachable
 			 *  - is an object
@@ -697,7 +666,7 @@ DUK_LOCAL void duk__sweep_heap(duk_heap *heap, duk_small_uint_t flags, duk_size_
 	heap->heap_allocated = NULL;
 	while (curr) {
 		/* Strings and ROM objects are never placed on the heap allocated list. */
-		DUK_ASSERT(!DUK_HEAPHDR_IS_ANY_STRING(curr));
+		DUK_ASSERT(DUK_HEAPHDR_GET_TYPE(curr) != DUK_HTYPE_STRING);
 		DUK_ASSERT(!DUK_HEAPHDR_HAS_READONLY(curr));
 
 		next = DUK_HEAPHDR_GET_NEXT(heap, curr);
@@ -719,7 +688,7 @@ DUK_LOCAL void duk__sweep_heap(duk_heap *heap, duk_small_uint_t flags, duk_size_
 #if defined(DUK_USE_FINALIZER_SUPPORT)
 			if (DUK_UNLIKELY(DUK_HEAPHDR_HAS_FINALIZABLE(curr))) {
 				DUK_ASSERT(!DUK_HEAPHDR_HAS_FINALIZED(curr));
-				DUK_ASSERT(DUK_HEAPHDR_IS_ANY_OBJECT(curr));
+				DUK_ASSERT(DUK_HEAPHDR_GET_TYPE(curr) == DUK_HTYPE_OBJECT);
 				DUK_DD(DUK_DDPRINT("sweep; reachable, finalizable --> move to finalize_list: %p", (void *) curr));
 
 #if defined(DUK_USE_REFERENCE_COUNTING)
@@ -735,7 +704,7 @@ DUK_LOCAL void duk__sweep_heap(duk_heap *heap, duk_small_uint_t flags, duk_size_
 			{
 				if (DUK_UNLIKELY(DUK_HEAPHDR_HAS_FINALIZED(curr))) {
 					DUK_ASSERT(!DUK_HEAPHDR_HAS_FINALIZABLE(curr));
-					DUK_ASSERT(DUK_HEAPHDR_IS_ANY_OBJECT(curr));
+					DUK_ASSERT(DUK_HEAPHDR_GET_TYPE(curr) == DUK_HTYPE_OBJECT);
 
 					if (flags & DUK_MS_FLAG_POSTPONE_RESCUE) {
 						DUK_DD(DUK_DDPRINT("sweep; reachable, finalized, but postponing rescue decisions "
@@ -778,7 +747,7 @@ DUK_LOCAL void duk__sweep_heap(duk_heap *heap, duk_small_uint_t flags, duk_size_
 			 *  mark-and-sweep and refzero finalizers, so there are
 			 *  no side effects that would affect the heap lists.
 			 */
-			if (DUK_HEAPHDR_IS_ANY_OBJECT(curr) && DUK_HOBJECT_IS_THREAD((duk_hobject *) curr)) {
+			if (DUK_HEAPHDR_IS_OBJECT(curr) && DUK_HOBJECT_IS_THREAD((duk_hobject *) curr)) {
 				duk_hthread *thr_curr = (duk_hthread *) curr;
 				DUK_DD(DUK_DDPRINT("value stack shrink check for thread: %!O", curr));
 				duk_valstack_shrink_check_nothrow(thr_curr, flags & DUK_MS_FLAG_EMERGENCY /*snug*/);
@@ -888,7 +857,7 @@ DUK_LOCAL int duk__protected_compact_object(duk_hthread *thr, void *udata) {
 
 	DUK_UNREF(udata);
 	obj = duk_known_hobject(thr, -1);
-	duk_hobject_compact_object(thr, obj);
+	duk_hobject_compact_props(thr, obj);
 	return 0;
 }
 
@@ -904,8 +873,7 @@ DUK_LOCAL void duk__compact_object_list(duk_heap *heap, duk_hthread *thr, duk_he
 #endif
 	duk_heaphdr *curr;
 #if defined(DUK_USE_DEBUG)
-	duk_size_t old_e_bytes, old_i_bytes, old_h_bytes, old_a_bytes, old_bytes;
-	duk_size_t new_e_bytes, new_i_bytes, new_h_bytes, new_a_bytes, new_bytes;
+	duk_size_t old_size, new_size;
 #endif
 	duk_hobject *obj;
 
@@ -915,18 +883,14 @@ DUK_LOCAL void duk__compact_object_list(duk_heap *heap, duk_hthread *thr, duk_he
 	while (curr) {
 		DUK_DDD(DUK_DDDPRINT("mark-and-sweep compact: %p", (void *) curr));
 
-		if (!DUK_HEAPHDR_IS_ANY_OBJECT(curr)) {
+		if (DUK_HEAPHDR_GET_TYPE(curr) != DUK_HTYPE_OBJECT) {
 			goto next;
 		}
-
 		obj = (duk_hobject *) curr;
 
 #if defined(DUK_USE_DEBUG)
-		old_e_bytes = duk_hobject_get_ebytes(obj);
-		old_i_bytes = duk_hobject_get_ibytes(obj);
-		old_h_bytes = duk_hobject_get_hbytes(heap, obj);
-		old_a_bytes = duk_hobject_get_abytes(obj);
-		old_bytes = old_e_bytes + old_i_bytes + old_h_bytes + old_a_bytes;
+		old_size =
+		    DUK_HOBJECT_P_COMPUTE_SIZE(DUK_HOBJECT_GET_ESIZE(obj), DUK_HOBJECT_GET_ASIZE(obj), DUK_HOBJECT_GET_HSIZE(obj));
 #endif
 
 		DUK_DD(DUK_DDPRINT("compact object: %p", (void *) obj));
@@ -935,16 +899,13 @@ DUK_LOCAL void duk__compact_object_list(duk_heap *heap, duk_hthread *thr, duk_he
 		duk_safe_call(thr, duk__protected_compact_object, NULL, 1, 0);
 
 #if defined(DUK_USE_DEBUG)
-		new_e_bytes = duk_hobject_get_ebytes(obj);
-		new_i_bytes = duk_hobject_get_ibytes(obj);
-		new_h_bytes = duk_hobject_get_hbytes(heap, obj);
-		new_a_bytes = duk_hobject_get_abytes(obj);
-		new_bytes = new_e_bytes + new_i_bytes + new_h_bytes + new_a_bytes;
+		new_size =
+		    DUK_HOBJECT_P_COMPUTE_SIZE(DUK_HOBJECT_GET_ESIZE(obj), DUK_HOBJECT_GET_ASIZE(obj), DUK_HOBJECT_GET_HSIZE(obj));
 #endif
 
 #if defined(DUK_USE_DEBUG)
 		(*p_count_compact)++;
-		(*p_count_bytes_saved) += (duk_size_t) (old_bytes - new_bytes);
+		(*p_count_bytes_saved) += (duk_size_t) (old_size - new_size);
 #endif
 
 	next:
@@ -1040,13 +1001,13 @@ DUK_LOCAL void duk__assert_heaphdr_flags(duk_heap *heap) {
 
 DUK_LOCAL void duk__assert_validity_cb1(duk_heap *heap, duk_heaphdr *h) {
 	DUK_UNREF(heap);
-	DUK_ASSERT(DUK_HEAPHDR_IS_ANY_OBJECT(h) || DUK_HEAPHDR_IS_ANY_BUFFER(h));
-	duk_heaphdr_assert_valid_subclassed(heap, h);
+	DUK_ASSERT(DUK_HEAPHDR_IS_OBJECT(h) || DUK_HEAPHDR_IS_BUFFER(h));
+	duk_heaphdr_assert_valid_subclassed(h);
 }
 DUK_LOCAL void duk__assert_validity_cb2(duk_heap *heap, duk_hstring *h) {
 	DUK_UNREF(heap);
-	DUK_ASSERT(DUK_HEAPHDR_IS_ANY_STRING((duk_heaphdr *) h));
-	duk_heaphdr_assert_valid_subclassed(heap, (duk_heaphdr *) h);
+	DUK_ASSERT(DUK_HEAPHDR_IS_STRING((duk_heaphdr *) h));
+	duk_heaphdr_assert_valid_subclassed((duk_heaphdr *) h);
 }
 DUK_LOCAL void duk__assert_validity(duk_heap *heap) {
 	duk__assert_walk_list(heap, heap->heap_allocated, duk__assert_validity_cb1);
@@ -1123,7 +1084,7 @@ DUK_LOCAL void duk__check_refcount_heaphdr(duk_heaphdr *hdr) {
 	DUK_ASSERT(!DUK_HEAPHDR_HAS_READONLY(hdr));
 
 	expect_refc = hdr->h_assert_refcount;
-	if (DUK_HEAPHDR_IS_ANY_STRING(hdr) && DUK_HSTRING_HAS_PINNED_LITERAL((duk_hstring *) hdr)) {
+	if (DUK_HEAPHDR_IS_STRING(hdr) && DUK_HSTRING_HAS_PINNED_LITERAL((duk_hstring *) hdr)) {
 		expect_refc++;
 	}
 	count_ok = ((duk_size_t) DUK_HEAPHDR_GET_REFCOUNT(hdr) == expect_refc);
@@ -1178,51 +1139,10 @@ DUK_LOCAL void duk__assert_litcache_nulls(duk_heap *heap) {
 
 #if defined(DUK_USE_DEBUG)
 DUK_LOCAL void duk__dump_stats(duk_heap *heap) {
-	duk_uint_t i, j;
-
 	DUK_D(DUK_DPRINT("stats executor: opcodes=%ld, interrupt=%ld, throw=%ld",
 	                 (long) heap->stats_exec_opcodes,
 	                 (long) heap->stats_exec_interrupt,
 	                 (long) heap->stats_exec_throw));
-	for (i = 0; i < 256; i += 32) {
-		duk_int_t *opc = (duk_int_t *) heap->stats_exec_opcode;
-		DUK_D(DUK_DPRINT("  opcodes[%ld-%ld]: %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld "
-		                 "%ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld",
-		                 (long) i,
-		                 (long) (i + 31),
-		                 opc[i + 0],
-		                 opc[i + 1],
-		                 opc[i + 2],
-		                 opc[i + 3],
-		                 opc[i + 4],
-		                 opc[i + 5],
-		                 opc[i + 6],
-		                 opc[i + 7],
-		                 opc[i + 8],
-		                 opc[i + 9],
-		                 opc[i + 10],
-		                 opc[i + 11],
-		                 opc[i + 12],
-		                 opc[i + 13],
-		                 opc[i + 14],
-		                 opc[i + 15],
-		                 opc[i + 16],
-		                 opc[i + 17],
-		                 opc[i + 18],
-		                 opc[i + 19],
-		                 opc[i + 20],
-		                 opc[i + 21],
-		                 opc[i + 22],
-		                 opc[i + 23],
-		                 opc[i + 24],
-		                 opc[i + 25],
-		                 opc[i + 26],
-		                 opc[i + 27],
-		                 opc[i + 28],
-		                 opc[i + 29],
-		                 opc[i + 30],
-		                 opc[i + 31]));
-	}
 	DUK_D(DUK_DPRINT("stats call: all=%ld, tailcall=%ld, ecmatoecma=%ld",
 	                 (long) heap->stats_call_all,
 	                 (long) heap->stats_call_tailcall,
@@ -1235,12 +1155,9 @@ DUK_LOCAL void duk__dump_stats(duk_heap *heap) {
 	                 (long) heap->stats_ms_try_count,
 	                 (long) heap->stats_ms_skip_count,
 	                 (long) heap->stats_ms_emergency_count));
-	DUK_D(DUK_DPRINT("stats stringtable: intern_notemp=%ld, intern_temp=%ld, "
-	                 "intern_hit=%ld, intern_miss=%ld, "
+	DUK_D(DUK_DPRINT("stats stringtable: intern_hit=%ld, intern_miss=%ld, "
 	                 "resize_check=%ld, resize_grow=%ld, resize_shrink=%ld, "
 	                 "litcache_hit=%ld, litcache_miss=%ld, litcache_pin=%ld",
-	                 (long) heap->stats_strtab_intern_notemp,
-	                 (long) heap->stats_strtab_intern_temp,
 	                 (long) heap->stats_strtab_intern_hit,
 	                 (long) heap->stats_strtab_intern_miss,
 	                 (long) heap->stats_strtab_resize_check,
@@ -1249,24 +1166,9 @@ DUK_LOCAL void duk__dump_stats(duk_heap *heap) {
 	                 (long) heap->stats_strtab_litcache_hit,
 	                 (long) heap->stats_strtab_litcache_miss,
 	                 (long) heap->stats_strtab_litcache_pin));
-	DUK_D(DUK_DPRINT("stats object: realloc_strprops=%ld, realloc_idxprops=%ld, abandon_array=%ld",
-	                 (long) heap->stats_object_realloc_strprops,
-	                 (long) heap->stats_object_realloc_idxprops,
+	DUK_D(DUK_DPRINT("stats object: realloc_props=%ld, abandon_array=%ld",
+	                 (long) heap->stats_object_realloc_props,
 	                 (long) heap->stats_object_abandon_array));
-
-	DUK_D(DUK_DPRINT("stats getvalue: strkey_count=%ld, idxkey_count=%ld",
-	                 (long) heap->stats_getvalue_strkey_count,
-	                 (long) heap->stats_getvalue_idxkey_count));
-	DUK_D(DUK_DPRINT("stats get: strkey_count=%ld, idxkey_count=%ld",
-	                 (long) heap->stats_get_strkey_count,
-	                 (long) heap->stats_get_idxkey_count));
-	DUK_D(DUK_DPRINT("stats putvalue: strkey_count=%ld, idxkey_count=%ld",
-	                 (long) heap->stats_putvalue_strkey_count,
-	                 (long) heap->stats_putvalue_idxkey_count));
-	DUK_D(DUK_DPRINT("stats set: strkey_count=%ld, idxkey_count=%ld",
-	                 (long) heap->stats_set_strkey_count,
-	                 (long) heap->stats_set_idxkey_count));
-
 	DUK_D(DUK_DPRINT("stats getownpropdesc: count=%ld, hit=%ld, miss=%ld",
 	                 (long) heap->stats_getownpropdesc_count,
 	                 (long) heap->stats_getownpropdesc_hit,

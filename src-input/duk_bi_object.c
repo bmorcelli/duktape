@@ -9,7 +9,7 @@ DUK_INTERNAL duk_ret_t duk_bi_object_prototype_to_string(duk_hthread *thr) {
 	duk_tval *tv;
 
 	tv = DUK_HTHREAD_THIS_PTR(thr);
-	duk_push_objproto_tostring_tval(thr, tv, 0 /*avoid_side_effects*/);
+	duk_push_class_string_tval(thr, tv, 0 /*avoid_side_effects*/);
 	return 1;
 }
 
@@ -42,7 +42,7 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor(duk_hthread *thr) {
 
 	(void) duk_push_object_helper(thr,
 	                              DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS |
-	                                  DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_OBJECT),
+	                                  DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_OBJECT),
 	                              DUK_BIDX_OBJECT_PROTOTYPE);
 	return 1;
 }
@@ -58,7 +58,7 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_assign(duk_hthread *thr) {
 	duk_to_object(thr, 0);
 	for (idx = 1; idx < nargs; idx++) {
 		/* E7 19.1.2.1 (step 4a) */
-		if (duk_is_nullish(thr, idx)) {
+		if (duk_is_null_or_undefined(thr, idx)) {
 			continue;
 		}
 
@@ -72,8 +72,9 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_assign(duk_hthread *thr) {
 			duk_put_prop(thr, 0);
 			/* [ target ... enum ] */
 		}
-		/* pop the enumerator, because otherwise a large number of argumens will exhaust the valstack */
-		duk_pop_known(thr);
+		/* Could pop enumerator, but unnecessary because of duk_set_top()
+		 * below.
+		 */
 	}
 
 	duk_set_top(thr, 1);
@@ -84,7 +85,8 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_assign(duk_hthread *thr) {
 #if defined(DUK_USE_OBJECT_BUILTIN) && defined(DUK_USE_ES6)
 DUK_INTERNAL duk_ret_t duk_bi_object_constructor_is(duk_hthread *thr) {
 	DUK_ASSERT_TOP(thr, 2);
-	return duk_push_boolean_return1(thr, duk_samevalue(thr, 0, 1));
+	duk_push_boolean(thr, duk_samevalue(thr, 0, 1));
+	return 1;
 }
 #endif
 
@@ -102,7 +104,7 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_create(duk_hthread *thr) {
 
 	(void) duk_push_object_helper_proto(thr,
 	                                    DUK_HOBJECT_FLAG_EXTENSIBLE | DUK_HOBJECT_FLAG_FASTREFS |
-	                                        DUK_HEAPHDR_HTYPE_AS_FLAGS(DUK_HTYPE_OBJECT),
+	                                        DUK_HOBJECT_CLASS_AS_FLAGS(DUK_HOBJECT_CLASS_OBJECT),
 	                                    proto);
 
 	if (!duk_is_undefined(thr, 1)) {
@@ -130,8 +132,9 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_properties(duk_hthread *
 	duk_small_uint_t pass;
 	duk_uint_t defprop_flags;
 	duk_hobject *obj;
-
-	DUK_ASSERT_TOP(thr, 2);
+	duk_idx_t idx_value;
+	duk_hobject *get;
+	duk_hobject *set;
 
 	/* Lightfunc and plain buffer handling by ToObject() coercion. */
 	obj = duk_require_hobject_promote_mask(thr, 0, DUK_TYPE_MASK_LIGHTFUNC | DUK_TYPE_MASK_BUFFER);
@@ -145,9 +148,7 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_properties(duk_hthread *
 	 *  Two pass approach to processing the property descriptors.
 	 *  On first pass validate and normalize all descriptors before
 	 *  any changes are made to the target object.  On second pass
-	 *  make the actual modifications to the target object.  This
-	 *  is not fully compliant because the two passes are visible
-	 *  as side effects (e.g. if the properties object is a Proxy).
+	 *  make the actual modifications to the target object.
 	 *
 	 *  Right now we'll just use the same normalize/validate helper
 	 *  on both passes, ignoring its outputs on the first pass.
@@ -157,9 +158,9 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_properties(duk_hthread *
 		duk_set_top(thr, 2); /* -> [ hobject props ] */
 		duk_enum(thr, 1, DUK_ENUM_OWN_PROPERTIES_ONLY | DUK_ENUM_INCLUDE_SYMBOLS /*enum_flags*/);
 
-		DUK_ASSERT_TOP(thr, 3);
-
 		for (;;) {
+			duk_hstring *key;
+
 			/* [ hobject props enum(props) ] */
 
 			duk_set_top(thr, 3);
@@ -174,15 +175,19 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_properties(duk_hthread *
 
 			/* [ hobject props enum(props) key desc ] */
 
-			defprop_flags = duk_prop_topropdesc(thr) | DUK_DEFPROP_THROW;
+			duk_hobject_prepare_property_descriptor(thr, 4 /*idx_desc*/, &defprop_flags, &idx_value, &get, &set);
 
-			/* [ hobject props enum(props) key <variable> ] */
+			/* [ hobject props enum(props) key desc [multiple values] ] */
 
 			if (pass == 0) {
 				continue;
 			}
 
-			duk_prop_defown(thr, obj, DUK_GET_TVAL_POSIDX(thr, 3), 4 /*idx_desc*/, defprop_flags);
+			/* This allows symbols on purpose. */
+			key = duk_known_hstring(thr, 3);
+			DUK_ASSERT(key != NULL);
+
+			duk_hobject_define_property_helper(thr, defprop_flags, obj, key, idx_value, get, set, 1 /*throw_flag*/);
 		}
 	}
 
@@ -200,7 +205,6 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_seal_freeze_shared(duk_hthread 
 	DUK_ASSERT_TOP(thr, 1);
 
 	duk_seal_freeze_raw(thr, 0, (duk_bool_t) duk_get_current_magic(thr) /*is_freeze*/);
-	DUK_ASSERT_TOP(thr, 1);
 	return 1;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN */
@@ -214,35 +218,18 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_is_sealed_frozen_shared(duk_hth
 	is_frozen = (duk_bool_t) duk_get_current_magic(thr);
 	mask = duk_get_type_mask(thr, 0);
 	if (mask & (DUK_TYPE_MASK_LIGHTFUNC | DUK_TYPE_MASK_BUFFER)) {
-		/* Zero-size buffers are always frozen and sealed.  Non-zero-size
-		 * buffers are sealed but not frozen (index props writable).
-		 */
-		duk_bool_t res;
-
 		DUK_ASSERT(is_frozen == 0 || is_frozen == 1);
-		if (mask & DUK_TYPE_MASK_LIGHTFUNC) {
-			/* Lightfunc always frozen and sealed. */
-			res = 1;
-		} else {
-			duk_hbuffer *h_buf = duk_require_hbuffer(thr, 0);
-			DUK_ASSERT(h_buf != NULL);
-			if (DUK_HBUFFER_GET_SIZE(h_buf) == 0) {
-				res = 1;
-			} else {
-				res = (is_frozen ^ 1); /* Buffer sealed but not frozen (index props writable). */
-			}
-		}
-		return duk_push_boolean_return1(thr, res);
+		duk_push_boolean(thr,
+		                 (mask & DUK_TYPE_MASK_LIGHTFUNC) ? 1 : /* lightfunc always frozen and sealed */
+                                     (is_frozen ^ 1)); /* buffer sealed but not frozen (index props writable) */
 	} else {
 		/* ES2015 Sections 19.1.2.12, 19.1.2.13: anything other than an object
 		 * is considered to be already sealed and frozen.
 		 */
 		h = duk_get_hobject(thr, 0);
-		return duk_push_boolean_return1(thr,
-		                                (h == NULL) ||
-		                                    duk_hobject_object_is_sealed_frozen_helper(thr, h, is_frozen /*is_frozen*/));
+		duk_push_boolean(thr, (h == NULL) || duk_hobject_object_is_sealed_frozen_helper(thr, h, is_frozen /*is_frozen*/));
 	}
-	/* never here */
+	return 1;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN */
 
@@ -287,40 +274,22 @@ DUK_INTERNAL duk_ret_t duk_bi_object_prototype_is_prototype_of(duk_hthread *thr)
 	/* E5.1 Section 15.2.4.6, step 3.a, lookup proto once before compare.
 	 * Prototype loops should cause an error to be thrown.
 	 */
-	return duk_push_boolean_return1(
+	duk_push_boolean(
 	    thr,
-	    duk_hobject_prototype_chain_contains(thr, duk_hobject_get_proto_raw(thr->heap, h_v), h_obj, 0 /*ignore_loop*/));
+	    duk_hobject_prototype_chain_contains(thr, DUK_HOBJECT_GET_PROTOTYPE(thr->heap, h_v), h_obj, 0 /*ignore_loop*/));
 	return 1;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN */
 
 #if defined(DUK_USE_OBJECT_BUILTIN)
 DUK_INTERNAL duk_ret_t duk_bi_object_prototype_has_own_property(duk_hthread *thr) {
-	duk_small_int_t rc;
-	duk_hobject *obj;
-
-	duk_to_property_key(thr, 0); /* Must happen first for correct side effect order. */
-	duk_push_this(thr);
-	obj = duk_to_hobject(thr, -1);
-	DUK_ASSERT(obj != NULL);
-
-	rc = duk_prop_getowndesc_obj_tvkey(thr, obj, duk_require_tval(thr, 0));
-	duk_push_boolean(thr, rc >= 0);
-	return 1;
+	return (duk_ret_t) duk_hobject_object_ownprop_helper(thr, 0 /*required_desc_flags*/);
 }
 #endif /* DUK_USE_OBJECT_BUILTIN */
 
 #if defined(DUK_USE_OBJECT_BUILTIN)
 DUK_INTERNAL duk_ret_t duk_bi_object_prototype_property_is_enumerable(duk_hthread *thr) {
-	duk_small_int_t attrs;
-	duk_hobject *obj;
-
-	duk_to_property_key(thr, 0);
-	duk_push_this(thr);
-	obj = duk_to_hobject(thr, -1);
-	attrs = duk_prop_getowndesc_obj_tvkey(thr, obj, duk_require_tval(thr, 0));
-	duk_push_boolean(thr, attrs >= 0 && (attrs & DUK_PROPDESC_FLAG_ENUMERABLE));
-	return 1;
+	return (duk_ret_t) duk_hobject_object_ownprop_helper(thr, DUK_PROPDESC_FLAG_ENUMERABLE /*required_desc_flags*/);
 }
 #endif /* DUK_USE_OBJECT_BUILTIN */
 
@@ -364,7 +333,7 @@ DUK_INTERNAL duk_ret_t duk_bi_object_getprototype_shared(duk_hthread *thr) {
 		break;
 	case DUK_TAG_OBJECT:
 		h = DUK_TVAL_GET_OBJECT(tv);
-		proto = duk_hobject_get_proto_raw(thr->heap, h);
+		proto = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, h);
 		break;
 	default:
 		/* This implicitly handles CheckObjectCoercible() caused
@@ -372,7 +341,11 @@ DUK_INTERNAL duk_ret_t duk_bi_object_getprototype_shared(duk_hthread *thr) {
 		 */
 		DUK_DCERROR_TYPE_INVALID_ARGS(thr);
 	}
-	duk_push_hobject_or_null(thr, proto);
+	if (proto != NULL) {
+		duk_push_hobject(thr, proto);
+	} else {
+		duk_push_null(thr);
+	}
 	return 1;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN || DUK_USE_REFLECT_BUILTIN */
@@ -439,11 +412,23 @@ DUK_INTERNAL duk_ret_t duk_bi_object_setprototype_shared(duk_hthread *thr) {
 	}
 	DUK_ASSERT(h_obj != NULL);
 
-	if (!duk_js_setprototypeof(thr, h_obj, h_new_proto)) {
+	/* [[SetPrototypeOf]] standard behavior, E6 9.1.2. */
+	/* TODO: implement Proxy object support here */
+
+	if (h_new_proto == DUK_HOBJECT_GET_PROTOTYPE(thr->heap, h_obj)) {
+		goto skip;
+	}
+	if (!DUK_HOBJECT_HAS_EXTENSIBLE(h_obj)) {
 		goto fail_nonextensible;
 	}
-
-	/* fall through */
+	for (h_curr = h_new_proto; h_curr != NULL; h_curr = DUK_HOBJECT_GET_PROTOTYPE(thr->heap, h_curr)) {
+		/* Loop prevention. */
+		if (h_curr == h_obj) {
+			goto fail_loop;
+		}
+	}
+	DUK_HOBJECT_SET_PROTOTYPE_UPDREF(thr, h_obj, h_new_proto);
+	/* fall thru */
 
 skip:
 	duk_set_top(thr, 1);
@@ -453,13 +438,13 @@ skip:
 	return ret_success;
 
 fail_nonextensible:
+fail_loop:
 	if (magic != 2) {
 		DUK_DCERROR_TYPE_INVALID_ARGS(thr);
 	} else {
 		duk_push_false(thr);
 		return 1;
 	}
-	return 0;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN || DUK_USE_REFLECT_BUILTIN */
 
@@ -471,6 +456,9 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_property(duk_hthread *th
 	 */
 
 	duk_hobject *obj;
+	duk_hstring *key;
+	duk_hobject *get;
+	duk_hobject *set;
 	duk_idx_t idx_value;
 	duk_uint_t defprop_flags;
 	duk_small_uint_t magic;
@@ -478,7 +466,6 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_property(duk_hthread *th
 	duk_bool_t ret;
 
 	DUK_ASSERT(thr != NULL);
-	DUK_ASSERT_TOP(thr, 3);
 
 	DUK_DDD(DUK_DDDPRINT("Object.defineProperty(): ctx=%p obj=%!T key=%!T desc=%!T",
 	                     (void *) thr,
@@ -496,15 +483,32 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_property(duk_hthread *th
 	 */
 	obj = duk_require_hobject_promote_mask(thr, 0, DUK_TYPE_MASK_LIGHTFUNC | DUK_TYPE_MASK_BUFFER);
 	DUK_ASSERT(obj != NULL);
-	DUK_ASSERT(duk_get_top(thr) == 3);
-	defprop_flags = duk_prop_topropdesc(thr); /* -> [ obj key <variable> */
-	DUK_ASSERT(magic == 0U || magic == 1U);
-	if (magic == 0U) {
-		defprop_flags |= DUK_DEFPROP_THROW;
-	}
-	ret = duk_prop_defown(thr, obj, DUK_GET_TVAL_POSIDX(thr, 1), 2 /*idx_desc*/, defprop_flags);
+	key = duk_to_property_key_hstring(thr, 1);
+	(void) duk_require_hobject(thr, 2);
 
-	/* Ignore the property descriptor conversion outputs on the value stack,
+	DUK_ASSERT(obj != NULL);
+	DUK_ASSERT(key != NULL);
+	DUK_ASSERT(duk_get_hobject(thr, 2) != NULL);
+
+	/*
+	 *  Validate and convert argument property descriptor (an ECMAScript
+	 *  object) into a set of defprop_flags and possibly property value,
+	 *  getter, and/or setter values on the value stack.
+	 *
+	 *  Lightfunc set/get values are coerced to full Functions.
+	 */
+
+	duk_hobject_prepare_property_descriptor(thr, 2 /*idx_desc*/, &defprop_flags, &idx_value, &get, &set);
+
+	/*
+	 *  Use Object.defineProperty() helper for the actual operation.
+	 */
+
+	DUK_ASSERT(magic == 0U || magic == 1U);
+	throw_flag = magic ^ 1U;
+	ret = duk_hobject_define_property_helper(thr, defprop_flags, obj, key, idx_value, get, set, throw_flag);
+
+	/* Ignore the normalize/validate helper outputs on the value stack,
 	 * they're popped automatically.
 	 */
 
@@ -521,25 +525,16 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_define_property(duk_hthread *th
 
 #if defined(DUK_USE_OBJECT_BUILTIN) || defined(DUK_USE_REFLECT_BUILTIN)
 DUK_INTERNAL duk_ret_t duk_bi_object_constructor_get_own_property_descriptor(duk_hthread *thr) {
-	duk_hobject *obj;
-	duk_small_int_t attrs;
-
 	DUK_ASSERT_TOP(thr, 2);
 
 	/* ES2015 Section 19.1.2.6, step 1 */
 	if (duk_get_current_magic(thr) == 0) {
 		duk_to_object(thr, 0);
 	}
+
 	/* [ obj key ] */
 
-	obj = duk_require_hobject(thr, 0);
-	attrs = duk_prop_getowndesc_obj_tvkey(thr, obj, duk_require_tval(thr, 1));
-#if 0
-	if (attrs < 0) {
-		return 0;
-	}
-#endif
-	duk_prop_frompropdesc_propattrs(thr, attrs);
+	duk_hobject_object_get_own_property_descriptor(thr, -2);
 	return 1;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN || DUK_USE_REFLECT_BUILTIN */
@@ -562,7 +557,8 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_is_extensible(duk_hthread *thr)
 		h = duk_require_hobject_accept_mask(thr, 0, DUK_TYPE_MASK_LIGHTFUNC | DUK_TYPE_MASK_BUFFER);
 	}
 
-	return duk_push_boolean_return1(thr, (h != NULL) && duk_js_isextensible(thr, h));
+	duk_push_boolean(thr, (h != NULL) && DUK_HOBJECT_HAS_EXTENSIBLE(h));
+	return 1;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN || DUK_USE_REFLECT_BUILTIN */
 
@@ -573,26 +569,30 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_is_extensible(duk_hthread *thr)
  * 2=Object.getOwnPropertySymbols(),
  * 3=Reflect.ownKeys()
  */
-DUK_LOCAL const duk_uint8_t duk__object_keys_ownpropkeys_flags[4] = {
+DUK_LOCAL const duk_small_uint_t duk__object_keys_enum_flags[4] = {
 	/* Object.keys() */
-	DUK_OWNPROPKEYS_FLAG_INCLUDE_ARRIDX | DUK_OWNPROPKEYS_FLAG_INCLUDE_STRING | DUK_OWNPROPKEYS_FLAG_REQUIRE_ENUMERABLE |
-	    DUK_OWNPROPKEYS_FLAG_STRING_COERCE,
+	DUK_ENUM_OWN_PROPERTIES_ONLY | DUK_ENUM_NO_PROXY_BEHAVIOR,
 
 	/* Object.getOwnPropertyNames() */
-	DUK_OWNPROPKEYS_FLAG_INCLUDE_ARRIDX | DUK_OWNPROPKEYS_FLAG_INCLUDE_STRING | DUK_OWNPROPKEYS_FLAG_STRING_COERCE,
+	DUK_ENUM_INCLUDE_NONENUMERABLE | DUK_ENUM_OWN_PROPERTIES_ONLY | DUK_ENUM_NO_PROXY_BEHAVIOR,
 
 	/* Object.getOwnPropertySymbols() */
-	DUK_OWNPROPKEYS_FLAG_INCLUDE_SYMBOL | DUK_OWNPROPKEYS_FLAG_STRING_COERCE, /* not necessary */
+	DUK_ENUM_INCLUDE_SYMBOLS | DUK_ENUM_OWN_PROPERTIES_ONLY | DUK_ENUM_EXCLUDE_STRINGS | DUK_ENUM_INCLUDE_NONENUMERABLE |
+	    DUK_ENUM_NO_PROXY_BEHAVIOR,
 
 	/* Reflect.ownKeys() */
-	DUK_OWNPROPKEYS_FLAG_INCLUDE_ARRIDX | DUK_OWNPROPKEYS_FLAG_INCLUDE_STRING | DUK_OWNPROPKEYS_FLAG_INCLUDE_SYMBOL |
-	    DUK_OWNPROPKEYS_FLAG_STRING_COERCE
+	DUK_ENUM_INCLUDE_SYMBOLS | DUK_ENUM_OWN_PROPERTIES_ONLY | DUK_ENUM_INCLUDE_NONENUMERABLE | DUK_ENUM_NO_PROXY_BEHAVIOR
 };
 
 DUK_INTERNAL duk_ret_t duk_bi_object_constructor_keys_shared(duk_hthread *thr) {
 	duk_hobject *obj;
+#if defined(DUK_USE_ES6_PROXY)
+	duk_hobject *h_proxy_target;
+	duk_hobject *h_proxy_handler;
+	duk_hobject *h_trap_result;
+#endif
+	duk_small_uint_t enum_flags;
 	duk_int_t magic;
-	duk_uint_t ownpropkeys_flags;
 
 	DUK_ASSERT_TOP(thr, 1);
 
@@ -607,11 +607,51 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_keys_shared(duk_hthread *thr) {
 		obj = duk_to_hobject(thr, 0);
 	}
 	DUK_ASSERT(obj != NULL);
+	DUK_UNREF(obj);
 
-	DUK_ASSERT(magic >= 0 && magic < (duk_int_t) (sizeof(duk__object_keys_ownpropkeys_flags) / sizeof(duk_uint8_t)));
-	ownpropkeys_flags = duk__object_keys_ownpropkeys_flags[magic];
-	duk_prop_ownpropkeys(thr, obj, ownpropkeys_flags);
+	/* XXX: proxy chains */
+
+#if defined(DUK_USE_ES6_PROXY)
+	/* XXX: better sharing of code between proxy target call sites */
+	if (DUK_LIKELY(!duk_hobject_proxy_check(obj, &h_proxy_target, &h_proxy_handler))) {
+		goto skip_proxy;
+	}
+
+	duk_push_hobject(thr, h_proxy_handler);
+	if (!duk_get_prop_stridx_short(thr, -1, DUK_STRIDX_OWN_KEYS)) {
+		/* Careful with reachability here: don't pop 'obj' before pushing
+		 * proxy target.
+		 */
+		DUK_DDD(DUK_DDDPRINT("no ownKeys trap, get keys of target instead"));
+		duk_pop_2(thr);
+		duk_push_hobject(thr, h_proxy_target);
+		duk_replace(thr, 0);
+		DUK_ASSERT_TOP(thr, 1);
+		goto skip_proxy;
+	}
+
+	/* [ obj handler trap ] */
+	duk_insert(thr, -2);
+	duk_push_hobject(thr, h_proxy_target); /* -> [ obj trap handler target ] */
+	duk_call_method(thr, 1 /*nargs*/); /* -> [ obj trap_result ] */
+	h_trap_result = duk_require_hobject(thr, -1);
+	DUK_UNREF(h_trap_result);
+
+	magic = duk_get_current_magic(thr);
+	DUK_ASSERT(magic >= 0 && magic < (duk_int_t) (sizeof(duk__object_keys_enum_flags) / sizeof(duk_small_uint_t)));
+	enum_flags = duk__object_keys_enum_flags[magic];
+
+	duk_proxy_ownkeys_postprocess(thr, h_proxy_target, enum_flags);
 	return 1;
+
+skip_proxy:
+#endif /* DUK_USE_ES6_PROXY */
+
+	DUK_ASSERT_TOP(thr, 1);
+	magic = duk_get_current_magic(thr);
+	DUK_ASSERT(magic >= 0 && magic < (duk_int_t) (sizeof(duk__object_keys_enum_flags) / sizeof(duk_small_uint_t)));
+	enum_flags = duk__object_keys_enum_flags[magic];
+	return duk_hobject_get_enumerated_keys(thr, enum_flags);
 }
 #endif /* DUK_USE_OBJECT_BUILTIN || DUK_USE_REFLECT_BUILTIN */
 
@@ -625,7 +665,6 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_prevent_extensions(duk_hthread 
 	duk_hobject *h;
 	duk_uint_t mask;
 	duk_int_t magic;
-	duk_bool_t rc;
 
 	magic = duk_get_current_magic(thr);
 
@@ -640,23 +679,22 @@ DUK_INTERNAL duk_ret_t duk_bi_object_constructor_prevent_extensions(duk_hthread 
 
 	if (duk_check_type_mask(thr, 0, mask)) {
 		/* Not an object, already non-extensible so always success. */
-		rc = 1;
-	} else {
-		h = duk_require_hobject(thr, 0);
-		DUK_ASSERT(h != NULL);
-
-		rc = duk_js_preventextensions(thr, h);
+		goto done;
 	}
+	h = duk_require_hobject(thr, 0);
+	DUK_ASSERT(h != NULL);
 
-	if (magic == 0) {
-		if (rc == 0) {
-			DUK_ERROR_TYPE(thr, DUK_STR_CANNOT_PREVENT_EXTENSIONS);
-		}
-		/* Stack top contains object for success case. */
-	} else {
-		duk_push_boolean(thr, rc);
+	DUK_HOBJECT_CLEAR_EXTENSIBLE(h);
+
+	/* A non-extensible object cannot gain any more properties,
+	 * so this is a good time to compact.
+	 */
+	duk_hobject_compact_props(thr, h);
+
+done:
+	if (magic == 1) {
+		duk_push_true(thr);
 	}
-
 	return 1;
 }
 #endif /* DUK_USE_OBJECT_BUILTIN || DUK_USE_REFLECT_BUILTIN */
@@ -703,8 +741,8 @@ DUK_INTERNAL duk_ret_t duk_bi_object_prototype_lookupaccessor(duk_hthread *thr) 
 		}
 		duk_pop(thr);
 
-		if (DUK_UNLIKELY(--sanity == 0)) {
-			DUK_ERROR_RANGE_PROTO_SANITY(thr);
+		if (DUK_UNLIKELY(sanity-- == 0)) {
+			DUK_ERROR_RANGE(thr, DUK_STR_PROTOTYPE_CHAIN_LIMIT);
 			DUK_WO_NORETURN(return 0;);
 		}
 

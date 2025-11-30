@@ -1015,8 +1015,8 @@ DUK_LOCAL duk_uint32_t duk__parse_regexp_flags(duk_hthread *thr, duk_hstring *h)
 	const duk_uint8_t *p_end;
 	duk_uint32_t flags = 0;
 
-	p = duk_hstring_get_data(h);
-	p_end = p + duk_hstring_get_bytelen(h);
+	p = DUK_HSTRING_GET_DATA(h);
+	p_end = p + DUK_HSTRING_GET_BYTELEN(h);
 
 	/* Note: can be safely scanned as bytes (undecoded) */
 
@@ -1087,7 +1087,8 @@ DUK_LOCAL void duk__create_escaped_source(duk_hthread *thr, int idx_pattern) {
 	duk_uint_fast8_t c_prev, c;
 
 	h = duk_known_hstring(thr, idx_pattern);
-	p = (const duk_uint8_t *) duk_hstring_get_data_and_bytelen(h, &n);
+	p = (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h);
+	n = (duk_size_t) DUK_HSTRING_GET_BYTELEN(h);
 
 	if (n == 0) {
 		duk_push_literal(thr, "(?:)");
@@ -1174,8 +1175,8 @@ DUK_INTERNAL void duk_regexp_compile(duk_hthread *thr) {
 	DUK_LEXER_INITCTX(&re_ctx.lex); /* duplicate zeroing, expect for (possible) NULL inits */
 	re_ctx.thr = thr;
 	re_ctx.lex.thr = thr;
-	re_ctx.lex.input = duk_hstring_get_data(h_pattern);
-	re_ctx.lex.input_length = duk_hstring_get_bytelen(h_pattern);
+	re_ctx.lex.input = DUK_HSTRING_GET_DATA(h_pattern);
+	re_ctx.lex.input_length = DUK_HSTRING_GET_BYTELEN(h_pattern);
 	re_ctx.lex.token_limit = DUK_RE_COMPILE_TOKEN_LIMIT;
 	re_ctx.recursion_limit = DUK_USE_REGEXP_COMPILER_RECLIMIT;
 	re_ctx.re_flags = duk__parse_regexp_flags(thr, h_flags);
@@ -1232,6 +1233,7 @@ DUK_INTERNAL void duk_regexp_compile(duk_hthread *thr) {
 	/* [ ... pattern flags escaped_source buffer ] */
 
 	DUK_BW_COMPACT(thr, &re_ctx.bw);
+	(void) duk_buffer_to_string(thr, -1); /* Safe because flags is at most 7 bit. */
 
 	/* [ ... pattern flags escaped_source bytecode ] */
 
@@ -1268,8 +1270,8 @@ DUK_INTERNAL void duk_regexp_create_instance(duk_hthread *thr) {
 
 	/* [ ... regexp_object escaped_source bytecode ] */
 
-	DUK_HEAPHDR_SET_HTYPE((duk_heaphdr *) h, DUK_HTYPE_REGEXP);
-	duk_hobject_set_proto_raw_updref(thr, h, thr->builtins[DUK_BIDX_REGEXP_PROTOTYPE]);
+	DUK_HOBJECT_SET_CLASS_NUMBER(h, DUK_HOBJECT_CLASS_REGEXP);
+	DUK_HOBJECT_SET_PROTOTYPE_UPDREF(thr, h, thr->builtins[DUK_BIDX_REGEXP_PROTOTYPE]);
 
 	duk_xdef_prop_stridx_short(thr, -3, DUK_STRIDX_INT_BYTECODE, DUK_PROPDESC_FLAGS_NONE);
 

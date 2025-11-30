@@ -356,9 +356,9 @@ DUK_INTERNAL duk_size_t duk_unicode_unvalidated_utf8_length(const duk_uint8_t *d
 	}
 
 	/* Full, aligned 4-byte reads. */
-	p32_end = (const duk_uint32_t *) (const void *) (p + ((duk_size_t) (p_end - p) & (duk_size_t) (~0x03U)));
+	p32_end = (const duk_uint32_t *) (const void *) (p + ((duk_size_t) (p_end - p) & (duk_size_t) (~0x03)));
 	p32 = (const duk_uint32_t *) (const void *) p;
-	while (p32 != p32_end) {
+	while (p32 != (const duk_uint32_t *) p32_end) {
 		duk_uint32_t x;
 		x = *p32++;
 		if (DUK_LIKELY((x & 0x80808080UL) == 0)) {
@@ -493,7 +493,7 @@ DUK_INTERNAL duk_bool_t duk_unicode_is_utf8_compatible(const duk_uint8_t *buf, d
  *  Used for slow path Unicode matching.
  */
 
-/* Must match configure tooling, generateMatchTable3(). */
+/* Must match tools/extract_chars.py, generate_match_table3(). */
 DUK_LOCAL duk_uint32_t duk__uni_decode_value(duk_bitdecoder_ctx *bd_ctx) {
 	duk_uint32_t t;
 
@@ -558,43 +558,48 @@ DUK_INTERNAL duk_small_int_t duk_unicode_is_whitespace(duk_codepoint_t cp) {
 	 *  E5 Section 7.2 specifies six characters specifically as
 	 *  white space:
 	 *
-	 *    - 0009: <control>
-	 *    - 000B: <control>
-	 *    - 000C: <control>
-	 *    - 0020: SPACE
-	 *    - 00A0: NO-BREAK SPACE
-	 *    - FEFF: ZERO WIDTH NO-BREAK SPACE
+	 *    0009;<control>;Cc;0;S;;;;;N;CHARACTER TABULATION;;;;
+	 *    000B;<control>;Cc;0;S;;;;;N;LINE TABULATION;;;;
+	 *    000C;<control>;Cc;0;WS;;;;;N;FORM FEED (FF);;;;
+	 *    0020;SPACE;Zs;0;WS;;;;;N;;;;;
+	 *    00A0;NO-BREAK SPACE;Zs;0;CS;<noBreak> 0020;;;;N;NON-BREAKING SPACE;;;;
+	 *    FEFF;ZERO WIDTH NO-BREAK SPACE;Cf;0;BN;;;;;N;BYTE ORDER MARK;;;;
 	 *
 	 *  It also specifies any Unicode category 'Zs' characters as white
-	 *  space.  Current result (Unicode 12.1.0):
+	 *  space.  These can be extracted with the "tools/extract_chars.py" script.
+	 *  Current result:
 	 *
-	 *    CATEGORY: Zs
-	 *    - 0020: SPACE
-	 *    - 00A0: NO-BREAK SPACE
-	 *    - 1680: OGHAM SPACE MARK
-	 *    - 2000: EN QUAD
-	 *    - 2001: EM QUAD
-	 *    - 2002: EN SPACE
-	 *    - 2003: EM SPACE
-	 *    - 2004: THREE-PER-EM SPACE
-	 *    - 2005: FOUR-PER-EM SPACE
-	 *    - 2006: SIX-PER-EM SPACE
-	 *    - 2007: FIGURE SPACE
-	 *    - 2008: PUNCTUATION SPACE
-	 *    - 2009: THIN SPACE
-	 *    - 200A: HAIR SPACE
-	 *    - 202F: NARROW NO-BREAK SPACE
-	 *    - 205F: MEDIUM MATHEMATICAL SPACE
-	 *    - 3000: IDEOGRAPHIC SPACE
+	 *    RAW OUTPUT:
+	 *    ===========
+	 *    0020;SPACE;Zs;0;WS;;;;;N;;;;;
+	 *    00A0;NO-BREAK SPACE;Zs;0;CS;<noBreak> 0020;;;;N;NON-BREAKING SPACE;;;;
+	 *    1680;OGHAM SPACE MARK;Zs;0;WS;;;;;N;;;;;
+	 *    180E;MONGOLIAN VOWEL SEPARATOR;Zs;0;WS;;;;;N;;;;;
+	 *    2000;EN QUAD;Zs;0;WS;2002;;;;N;;;;;
+	 *    2001;EM QUAD;Zs;0;WS;2003;;;;N;;;;;
+	 *    2002;EN SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    2003;EM SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    2004;THREE-PER-EM SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    2005;FOUR-PER-EM SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    2006;SIX-PER-EM SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    2007;FIGURE SPACE;Zs;0;WS;<noBreak> 0020;;;;N;;;;;
+	 *    2008;PUNCTUATION SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    2009;THIN SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    200A;HAIR SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    202F;NARROW NO-BREAK SPACE;Zs;0;CS;<noBreak> 0020;;;;N;;;;;
+	 *    205F;MEDIUM MATHEMATICAL SPACE;Zs;0;WS;<compat> 0020;;;;N;;;;;
+	 *    3000;IDEOGRAPHIC SPACE;Zs;0;WS;<wide> 0020;;;;N;;;;;
 	 *
 	 *    RANGES:
-	 *    - 0020
-	 *    - 00A0
-	 *    - 1680
-	 *    - 2000-200A
-	 *    - 202F
-	 *    - 205F
-	 *    - 3000
+	 *    =======
+	 *    0x0020
+	 *    0x00a0
+	 *    0x1680
+	 *    0x180e
+	 *    0x2000 ... 0x200a
+	 *    0x202f
+	 *    0x205f
+	 *    0x3000
 	 *
 	 *  A manual decoder (below) is probably most compact for this.
 	 */
@@ -615,7 +620,7 @@ DUK_INTERNAL duk_small_int_t duk_unicode_is_whitespace(duk_codepoint_t cp) {
 		if (lo <= 0x0aU || lo == 0x2fU || lo == 0x5fU) {
 			return 1;
 		}
-	} else if (cp == 0x1680L || cp == 0x3000L || cp == 0xfeffL) {
+	} else if (cp == 0x1680L || cp == 0x180eL || cp == 0x3000L || cp == 0xfeffL) {
 		return 1;
 	}
 
@@ -665,7 +670,7 @@ DUK_INTERNAL duk_small_int_t duk_unicode_is_identifier_start(duk_codepoint_t cp)
 	 *
 	 *  The "UnicodeLetter" alternative of the production allows letters
 	 *  from various Unicode categories.  These can be extracted with the
-	 *  configure tooling.
+	 *  "tools/extract_chars.py" script.
 	 *
 	 *  Because the result has hundreds of Unicode codepoint ranges, matching
 	 *  for any values >= 0x80 are done using a very slow range-by-range scan
@@ -756,7 +761,7 @@ DUK_INTERNAL duk_small_int_t duk_unicode_is_identifier_part(duk_codepoint_t cp) 
 	 *  The matching code reuses the "identifier start" tables, and then
 	 *  consults a separate range set for characters in "identifier part"
 	 *  but not in "identifier start".  These can be extracted with the
-	 *  configure tooling.
+	 *  "tools/extract_chars.py" script.
 	 *
 	 *  UnicodeCombiningMark -> categories Mn, Mc
 	 *  UnicodeDigit -> categories Nd
@@ -855,13 +860,14 @@ DUK_INTERNAL duk_small_int_t duk_unicode_is_letter(duk_codepoint_t cp) {
 
 /*
  *  Complex case conversion helper which decodes a bit-packed conversion
- *  control stream generated by configure tooling.  The conversion is
- *  very slow because it runs through the conversion data in a linear
+ *  control stream generated by tools/extract_caseconv.py.  The conversion
+ *  is very slow because it runs through the conversion data in a linear
  *  fashion to save space (which is why ASCII characters have a special
  *  fast path before arriving here).
  *
  *  The particular bit counts etc have been determined experimentally to
- *  be small but still sufficient, and must match the configure tooling.
+ *  be small but still sufficient, and must match the Python script
+ *  (tools/extract_caseconv.py).
  *
  *  The return value is the case converted codepoint or -1 if the conversion
  *  results in multiple characters (this is useful for regexp Canonicalization
@@ -1079,12 +1085,12 @@ DUK_INTERNAL void duk_unicode_case_convert_string(duk_hthread *thr, duk_bool_t u
 	DUK_ASSERT(h_input != NULL);
 
 	bw = &bw_alloc;
-	DUK_BW_INIT_PUSHBUF(thr, bw, duk_hstring_get_bytelen(h_input));
+	DUK_BW_INIT_PUSHBUF(thr, bw, DUK_HSTRING_GET_BYTELEN(h_input));
 
 	/* [ ... input buffer ] */
 
-	p_start = (const duk_uint8_t *) duk_hstring_get_data(h_input);
-	p_end = p_start + duk_hstring_get_bytelen(h_input);
+	p_start = (const duk_uint8_t *) DUK_HSTRING_GET_DATA(h_input);
+	p_end = p_start + DUK_HSTRING_GET_BYTELEN(h_input);
 	p = p_start;
 
 	prev = -1;

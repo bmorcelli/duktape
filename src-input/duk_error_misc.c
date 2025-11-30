@@ -143,7 +143,8 @@ DUK_INTERNAL void duk_err_check_debugger_integration(duk_hthread *thr) {
 	tv_obj = DUK_GET_TVAL_NEGIDX(thr, -1);
 	DUK_ASSERT(DUK_TVAL_IS_UNDEFINED(&thr->heap->lj.value1));
 	DUK_ASSERT(DUK_TVAL_IS_UNDEFINED(&thr->heap->lj.value2));
-	DUK_TVAL_SET_TVAL_INCREF(thr, &thr->heap->lj.value1, tv_obj);
+	DUK_TVAL_SET_TVAL(&thr->heap->lj.value1, tv_obj);
+	DUK_TVAL_INCREF(thr, tv_obj);
 	DUK_ASSERT_LJSTATE_SET(thr->heap);
 
 	duk_pop(thr);
@@ -165,14 +166,8 @@ DUK_INTERNAL void duk_err_setup_ljstate1(duk_hthread *thr, duk_small_uint_t lj_t
 	DUK_ASSERT_LJSTATE_UNSET(heap);
 
 	heap->lj.type = lj_type;
-	DUK_TVAL_SET_TVAL_INCREF(thr, &heap->lj.value1, tv_val);
+	DUK_TVAL_SET_TVAL(&heap->lj.value1, tv_val);
+	DUK_TVAL_INCREF(thr, tv_val);
 
 	DUK_ASSERT_LJSTATE_SET(heap);
 }
-
-#if defined(DUK_USE_FUZZILLI)
-/* Wrapper for easy usage in duk-fizzilli. */
-DUK_EXTERNAL_DECL void duk_assert_wrapper(duk_int_t x) {
-	DUK_ASSERT(x);
-}
-#endif /* DUK_USE_FUZZILLI */
