@@ -1,0 +1,1 @@
+python3 tools/configure.py --output-directory output-minimal --source-directory src-input/ --option-file config/examples/low_memory.yaml --option-file config/examples/shallow_c_stack.yaml --option-file config/examples/rom_builtins.yaml --rom-auto-lightfunc
